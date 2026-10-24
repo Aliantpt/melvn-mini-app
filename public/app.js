@@ -118,8 +118,9 @@
         const champLine = champ ? `<div class="champ">${esc(champ)}</div>` : '';
         return `<button class="card ${e.cancelled ? 'cancelled' : ''}" data-id="${esc(e.id)}">
           ${champLine}
-          <div class="row"><div class="title">${esc(e.title)}</div>${badges(e)}</div>
+          <div class="title">${esc(e.title)}</div>
           <div class="meta">${meta}</div>
+          ${badges(e)}
         </button>`;
       })
       .join('');
@@ -166,12 +167,14 @@
   }
 
   const FORMAT = { team: 'Командная', solo: 'Личная' };
+  const ROLE = { pilot: 'Пилот', manager: 'Менеджер' };
 
   function badges(e) {
-    if (e.cancelled) return '<span class="badge off">Отменено</span>';
+    if (e.cancelled) return '<span class="badges"><span class="badge off">Отменено</span></span>';
     const type = `<span class="badge ${/гонк/i.test(e.type) ? 'race' : ''}">${esc(e.type)}</span>`;
     const format = FORMAT[e.format] ? `<span class="badge">${FORMAT[e.format]}</span>` : '';
-    return `<span class="badges">${type}${format}</span>`;
+    const roles = (e.myRoles || []).map((r) => `<span class="badge role">${ROLE[r]}</span>`).join('');
+    return `<span class="badges">${type}${format}${roles}</span>`;
   }
 
   function personLine(p) {
@@ -210,12 +213,10 @@
     app.innerHTML = `
       ${tg ? '' : '<button class="back">‹ Назад</button>'}
       <div class="section">
-        <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px">
-          <div class="title" style="font-weight:700;font-size:19px">${esc(e.title)}</div>
-          ${badges(e)}
-        </div>
+        <div class="title" style="font-weight:700;font-size:19px">${esc(e.title)}</div>
         ${champLabel(e) ? `<div class="champ" style="margin-top:4px">${esc(champLabel(e))}</div>` : ''}
         <div class="meta small" style="margin-top:4px">${esc(fmtDate(e.date))}${e.start ? ' · ' + esc(fmtTime(e)) : ''}</div>
+        ${badges(e)}
       </div>
       <div class="section">
         <h3>Детали</h3>

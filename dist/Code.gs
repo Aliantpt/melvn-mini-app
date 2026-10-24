@@ -324,6 +324,11 @@ function buildView(data, tgUser, timezone) {
       description: e.description,
       cancelled: e.cancelled,
       calendarUrl: googleCalendarUrl(e, timezone, nameOf),
+      // Роль открывшего приложение именно в этой гонке.
+      myRoles: [
+        e.crews.some((c) => listsPerson(c.pilots, person)) && 'pilot',
+        e.crews.some((c) => listsPerson(c.managers, person)) && 'manager',
+      ].filter(Boolean),
       crews: e.crews.map((c) => ({
         name: c.name,
         pilots: c.pilots.map(personCard),

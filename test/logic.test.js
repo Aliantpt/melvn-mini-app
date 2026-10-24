@@ -67,6 +67,18 @@ test('training numbered stage becomes "Championship — Тренировка N"'
   assert.equal(f.title, 'Rotax — Тренировка 5');
 });
 
+test('myRoles shows the viewer\'s role in each race', () => {
+  const oleg = buildView(data, { username: 'oleg_manager' });
+  const byId = Object.fromEntries(oleg.events.map((e) => [e.id, e.myRoles]));
+  assert.deepEqual(byId.R1, ['manager']);
+  assert.deepEqual(byId.R2, ['pilot']);
+  const ivan = buildView(data, { username: 'ivan_petrov' });
+  assert.deepEqual(ivan.events[0].myRoles, ['pilot']);
+  const boss = buildView(data, { username: 'melvn_boss' });
+  assert.deepEqual(boss.events.find((e) => e.id === 'R1').myRoles, ['manager']);
+  assert.deepEqual(boss.events.find((e) => e.id === 'X1').myRoles, []);
+});
+
 test('manager of the second crew sees the race', () => {
   const v = buildView(data, { username: 'oleg_manager' });
   const r3 = v.events.find((e) => e.id === 'R3');
