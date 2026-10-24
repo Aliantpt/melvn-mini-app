@@ -17,7 +17,10 @@ const TIMEZONE = 'Europe/Moscow';
 const SHEETS = ['Люди', 'События', 'Заработок'];
 const INCOME_SHEET = 'Заработок';
 const INCOME_HEADERS = ['ID', 'Дата записи', 'Менеджер', 'ID гонки', 'Сумма', 'Комментарий'];
-const MAX_AUTH_AGE_SECONDS = 7 * 24 * 3600;
+// Подпись Telegram действует сутки: перехваченную ссылку нельзя использовать долго.
+const MAX_AUTH_AGE_SECONDS = 24 * 3600;
+const MAX_INCOME = 10000000;
+const MAX_WRITES_PER_HOUR = 30;
 
 function doGet(e) {
   const initData = (e && e.parameter && e.parameter.initData) || '';
@@ -31,7 +34,9 @@ function doGet(e) {
     }
     return jsonOut(buildView(readSheets(), user, TIMEZONE));
   } catch (err) {
-    return jsonOut({ error: 'sheet_unavailable', message: String((err && err.message) || err) });
+    // Подробности ошибки — только в журнал скрипта, наружу не отдаём.
+    console.error(err);
+    return jsonOut({ error: 'sheet_unavailable' });
   }
 }
 
@@ -63,15 +68,16 @@ function changeIncome(action, p, user) {
     const data = readSheets();
     const person = findPerson(buildPeople(data['Люди']), user);
     if (!person || !person.active) return { error: 'no_access' };
+    if (!allowWrite(person.key)) return { error: 'too_many' };
     const sh = incomeSheet();
 
     if (action === 'addIncome') {
       const raceId = String(p.raceId || '').trim();
-      const amount = parseMoney(p.amount);
-      if (!amount || amount < 0) return { error: 'bad_amount' };
+      const amount = /^\s*-/.test(String(p.amount || '')) ? 0 : parseMoney(p.amount);
+      if (!(amount > 0 && amount <= MAX_INCOME)) return { error: 'bad_amount' };
       if (!canAddIncome(buildEvents(data['События']), person, raceId)) return { error: 'not_manager' };
-      const note = String(p.note || '').slice(0, 200);
-      sh.appendRow([Utilities.getUuid(), new Date().toISOString(), person.key, raceId, amount, note]);
+      const note = safeCell(String(p.note || '').slice(0, 200));
+      sh.appendRow([Utilities.getUuid(), new Date().toISOString(), safeCell(person.key), safeCell(raceId), amount, note]);
       return null;
     }
 
@@ -88,6 +94,23 @@ function changeIncome(action, p, user) {
   } finally {
     lock.releaseLock();
   }
+}
+
+// Текст, начинающийся с = + - @, Google Таблицы считают формулой. Апостроф
+// в начале заставляет сохранить его как обычный текст.
+function safeCell(v) {
+  const s = String(v).replace(/[\u0000-\u001f]/g, ' ');
+  return /^[=+\-@\t\r]/.test(s) ? "'" + s : s;
+}
+
+// Не больше MAX_WRITES_PER_HOUR записей и удалений в час от одного человека.
+function allowWrite(key) {
+  const cache = CacheService.getScriptCache();
+  const k = 'w:' + key;
+  const n = Number(cache.get(k) || 0);
+  if (n >= MAX_WRITES_PER_HOUR) return false;
+  cache.put(k, String(n + 1), 3600);
+  return true;
 }
 
 // Лист «Заработок» создаётся сам при первой записи.
