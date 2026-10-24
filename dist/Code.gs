@@ -163,6 +163,12 @@ function parseFormat(v) {
   return '';
 }
 
+// Этап «3» → «Этап 3» у гонки и «Тренировка 3» у тренировки; текст — как есть.
+function stageLabel(stage, type) {
+  if (!/^\d+$/.test(stage)) return stage;
+  return (/трен/i.test(type) ? 'Тренировка ' : 'Этап ') + stage;
+}
+
 // Составы указываются прямо в таблице событий. Одна строка — один состав.
 // Если в гонке несколько составов, добавляется ещё строка с тем же ID:
 // в ней достаточно заполнить «Состав», «Менеджер» и «Пилоты», остальное
@@ -195,7 +201,8 @@ function buildEvents(eventRows) {
         cancelled: String(r['Статус'] || '').trim().toLowerCase().startsWith('отмен'),
         crews: [],
       };
-      if (!e.title) e.title = [e.championship, e.stage].filter(Boolean).join(', ') || id;
+      e.stageLabel = stageLabel(e.stage, e.type);
+      if (!e.title) e.title = [e.championship, e.stageLabel].filter(Boolean).join(' — ') || id;
       byId.set(id, e);
       events.push(e);
     }
@@ -242,7 +249,7 @@ const FORMAT_LABEL = { team: 'Командная', solo: 'Личная' };
 
 function calendarDetails(event, nameOf) {
   const lines = [[event.type, FORMAT_LABEL[event.format]].filter(Boolean).join(', ')];
-  const champ = [event.championship, event.stage].filter(Boolean).join(', ');
+  const champ = [event.championship, event.stageLabel].filter(Boolean).join(' — ');
   if (champ && champ !== event.title) lines.push(`Чемпионат: ${champ}`);
   if (event.track) lines.push(`Трасса: ${event.track}`);
   if (event.cost) lines.push(`Стоимость: ${event.cost}`);
@@ -305,7 +312,7 @@ function buildView(data, tgUser, timezone) {
       type: e.type,
       format: e.format,
       championship: e.championship,
-      stage: e.stage,
+      stage: e.stageLabel,
       title: e.title,
       date: `${e.date.y}-${pad(e.date.m)}-${pad(e.date.d)}`,
       start: e.start ? `${pad(e.start.h)}:${pad(e.start.min)}` : '',

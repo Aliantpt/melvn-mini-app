@@ -90,11 +90,10 @@
 
   const champKey = (e) => e.championship || NO_CHAMP;
 
-  // «Кубок Москвы · этап 3»; пусто, если название события и так из них собрано.
+  // «Кубок Москвы · Этап 3»; пусто, если название события и так из них собрано.
   function champLabel(e) {
-    if (e.title === [e.championship, e.stage].filter(Boolean).join(', ')) return '';
-    const stage = /^\d+$/.test(e.stage) ? `этап ${e.stage}` : e.stage;
-    return [e.championship, stage].filter(Boolean).join(' · ');
+    if (e.title === [e.championship, e.stage].filter(Boolean).join(' — ')) return '';
+    return [e.championship, e.stage].filter(Boolean).join(' · ');
   }
 
   function renderList() {

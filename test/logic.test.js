@@ -54,10 +54,17 @@ test('championship and stage are passed through; title falls back to them', () =
   const v = buildView(data, { username: 'oleg_manager' });
   const r1 = v.events.find((e) => e.id === 'R1');
   assert.equal(r1.championship, 'Кубок Москвы');
-  assert.equal(r1.stage, '3');
+  assert.equal(r1.stage, 'Этап 3');
   const r2 = v.events.find((e) => e.id === 'R2');
-  assert.equal(r2.title, 'RMC, Финал');
-  assert.match(decodeURIComponent(r1.calendarUrl), /Чемпионат: Кубок Москвы, 3/);
+  assert.equal(r2.title, 'RMC — Финал');
+  assert.match(decodeURIComponent(r1.calendarUrl), /Чемпионат: Кубок Москвы — Этап 3/);
+});
+
+test('training numbered stage becomes "Championship — Тренировка N"', () => {
+  const [e] = buildEvents([{ ID: 'T9', 'Тип': 'Тренировка', 'Чемпионат': 'Rotax', 'Этап': '2', 'Дата': '01.12.2026' }]);
+  assert.equal(e.title, 'Rotax — Тренировка 2');
+  const [f] = buildEvents([{ ID: 'T8', 'Тип': 'Тренировка', 'Чемпионат': 'Rotax', 'Этап': 'Тренировка 5', 'Дата': '01.12.2026' }]);
+  assert.equal(f.title, 'Rotax — Тренировка 5');
 });
 
 test('manager of the second crew sees the race', () => {
