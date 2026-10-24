@@ -15,8 +15,11 @@ const data = {
     { Telegram: '', 'Telegram ID': '123456', 'Имя': 'Без ника', 'Пилот': 'Да', 'Активен': '' },
   ],
   'События': [
-    { ID: 'R1', 'Тип': 'Гонка', 'Формат': 'Командная', 'Название': 'Этап 3', 'Дата': '15.11.2026', 'Начало': '10:00', 'Окончание': '18:00', 'Трасса': 'Картодром', 'Менеджер': 'oleg_manager', 'Пилоты': 'ivan_petrov, 555' },
-    { ID: 'R2', 'Тип': 'Гонка', 'Формат': 'Личная', 'Название': 'Личка', 'Дата': '22.11.2026', 'Начало': '11:00', 'Менеджер': '', 'Пилоты': 'max_kart; oleg_manager' },
+    { ID: 'R1', 'Тип': 'Гонка', 'Формат': 'Командная', 'Чемпионат': 'Кубок Москвы', 'Этап': '3', 'Название': 'Этап 3', 'Дата': '15.11.2026', 'Начало': '10:00', 'Окончание': '18:00', 'Трасса': 'Картодром', 'Состав': 'M-ELVN Orange', 'Менеджер': 'oleg_manager', 'Пилоты': 'ivan_petrov, 555' },
+    { ID: 'R1', 'Состав': 'M-ELVN Carbon', 'Менеджер': 'melvn_boss', 'Пилоты': 'kirill' },
+    { ID: 'R3', 'Тип': 'Гонка', 'Формат': 'Командная', 'Название': 'Только второй состав', 'Дата': '06.12.2026', 'Состав': 'A', 'Пилоты': 'someone' },
+    { ID: 'R3', 'Состав': 'B', 'Менеджер': 'oleg_manager', 'Пилоты': 'kirill' },
+    { ID: 'R2', 'Тип': 'Гонка', 'Формат': 'Личная', 'Чемпионат': 'RMC', 'Этап': 'Финал', 'Название': '', 'Дата': '22.11.2026', 'Начало': '11:00', 'Менеджер': '', 'Пилоты': 'max_kart; oleg_manager' },
     { ID: 'T1', 'Тип': 'Тренировка', 'Название': 'Тренировка', 'Дата': '08.11.2026', 'Статус': 'Отменено', 'Пилоты': 'anna_smirnova, 123456' },
     { ID: 'X1', 'Тип': 'Гонка', 'Название': 'Чужая гонка', 'Дата': '29.11.2026', 'Пилоты': 'someone_else' },
     { ID: 'BAD', 'Тип': 'Гонка', 'Название': 'Без даты', 'Дата': '' },
@@ -29,19 +32,49 @@ test('pilot sees only races the admin put them in', () => {
   const v = buildView(data, { id: 1, username: 'Ivan_Petrov' }, 'Europe/Moscow');
   assert.equal(v.access, true);
   assert.deepEqual(ids(v), ['R1']);
-  assert.deepEqual(v.events[0].pilots.map((p) => p.name), ['Иван Петров', 'Анна']);
-  assert.equal(v.events[0].pilots[0].me, true);
+  const [mine, other] = v.events[0].crews;
+  assert.equal(mine.name, 'M-ELVN Orange');
+  assert.deepEqual(mine.pilots.map((p) => p.name), ['Иван Петров', 'Анна']);
+  assert.equal(mine.pilots[0].me, true);
+  assert.equal(mine.mine, true);
+  assert.equal(other.name, 'M-ELVN Carbon');
+  assert.equal(other.mine, false);
+  assert.equal(other.pilots[0].name, '@kirill');
   assert.equal(v.events[0].format, 'team');
+});
+
+test('several crews: extra rows with the same ID add crews, not events', () => {
+  const events = buildEvents(data['События']);
+  assert.deepEqual(events.map((e) => e.id), ['R1', 'R3', 'R2', 'T1', 'X1']);
+  assert.equal(events[0].crews.length, 2);
+  assert.equal(events[0].title, 'Этап 3');
+});
+
+test('championship and stage are passed through; title falls back to them', () => {
+  const v = buildView(data, { username: 'oleg_manager' });
+  const r1 = v.events.find((e) => e.id === 'R1');
+  assert.equal(r1.championship, 'Кубок Москвы');
+  assert.equal(r1.stage, '3');
+  const r2 = v.events.find((e) => e.id === 'R2');
+  assert.equal(r2.title, 'RMC, Финал');
+  assert.match(decodeURIComponent(r1.calendarUrl), /Чемпионат: Кубок Москвы, 3/);
+});
+
+test('manager of the second crew sees the race', () => {
+  const v = buildView(data, { username: 'oleg_manager' });
+  const r3 = v.events.find((e) => e.id === 'R3');
+  assert.ok(r3);
+  assert.deepEqual(r3.crews.map((c) => c.mine), [false, true]);
 });
 
 test('manager sees races where they are manager or pilot, not all races', () => {
   const v = buildView(data, { id: 2, username: 'oleg_manager' });
-  assert.deepEqual(ids(v), ['R1', 'R2']);
+  assert.deepEqual(ids(v), ['R1', 'R2', 'R3']);
 });
 
 test('leadership sees every race with a valid date', () => {
   const v = buildView(data, { id: 3, username: 'melvn_boss' });
-  assert.deepEqual(ids(v), ['R1', 'R2', 'T1', 'X1']);
+  assert.deepEqual(ids(v), ['R1', 'R2', 'R3', 'T1', 'X1']);
 });
 
 test('participants can be listed by nick or by Telegram ID', () => {
@@ -62,16 +95,17 @@ test('inactive or unknown person has no access', () => {
 
 test('events are sorted by date', () => {
   const v = buildView(data, { username: 'melvn_boss' });
-  assert.deepEqual(v.events.map((e) => e.id), ['T1', 'R1', 'R2', 'X1']);
+  assert.deepEqual(v.events.map((e) => e.id), ['T1', 'R1', 'R2', 'X1', 'R3']);
 });
 
 test('calendar link: timed and all-day, with participants', () => {
-  const [r1, , t1] = buildEvents(data['События']);
+  const [r1, , , t1] = buildEvents(data['События']);
   const u = new URL(googleCalendarUrl(r1, 'Europe/Moscow'));
   assert.equal(u.searchParams.get('dates'), '20261115T100000/20261115T180000');
   assert.equal(u.searchParams.get('ctz'), 'Europe/Moscow');
   assert.match(u.searchParams.get('details'), /Гонка, Командная/);
-  assert.match(u.searchParams.get('details'), /Состав команды: @ivan_petrov/);
+  assert.match(u.searchParams.get('details'), /M-ELVN Orange:\nПилоты: @ivan_petrov, @555\nМенеджер: @oleg_manager/);
+  assert.match(u.searchParams.get('details'), /M-ELVN Carbon:/);
   const a = new URL(googleCalendarUrl(t1, 'Europe/Moscow'));
   assert.equal(a.searchParams.get('dates'), '20261108/20261109');
   assert.equal(a.searchParams.get('ctz'), null);

@@ -5,6 +5,10 @@
   const who = document.getElementById('who');
   let view = null;
   let tab = 'upcoming';
+  // Выбранные чемпионаты; пустой список — показывать все.
+  let champFilter = [];
+  const NO_CHAMP = '__none__';
+  const FILTER_KEY = 'champ_filter';
 
   if (tg) {
     tg.ready();
@@ -45,24 +49,97 @@
     else window.open(url, '_blank');
   }
 
+  // Фильтр хранится в облаке Telegram (виден на всех устройствах человека),
+  // а если оно недоступно — в браузере.
+  function loadFilter() {
+    return new Promise((resolve) => {
+      const parse = (v) => {
+        try {
+          const a = JSON.parse(v || '[]');
+          return Array.isArray(a) ? a : [];
+        } catch (e) {
+          return [];
+        }
+      };
+      const fromLocal = () => {
+        try {
+          resolve(parse(localStorage.getItem(FILTER_KEY)));
+        } catch (e) {
+          resolve([]);
+        }
+      };
+      if (tg && tg.CloudStorage && tg.isVersionAtLeast && tg.isVersionAtLeast('6.9')) {
+        try {
+          tg.CloudStorage.getItem(FILTER_KEY, (err, v) => (err ? fromLocal() : resolve(parse(v))));
+          return;
+        } catch (e) {}
+      }
+      fromLocal();
+    });
+  }
+
+  function saveFilter() {
+    const v = JSON.stringify(champFilter);
+    try {
+      localStorage.setItem(FILTER_KEY, v);
+    } catch (e) {}
+    try {
+      if (tg && tg.CloudStorage && tg.isVersionAtLeast && tg.isVersionAtLeast('6.9')) tg.CloudStorage.setItem(FILTER_KEY, v);
+    } catch (e) {}
+  }
+
+  const champKey = (e) => e.championship || NO_CHAMP;
+
+  // «Кубок Москвы · этап 3»; пусто, если название события и так из них собрано.
+  function champLabel(e) {
+    if (e.title === [e.championship, e.stage].filter(Boolean).join(', ')) return '';
+    const stage = /^\d+$/.test(e.stage) ? `этап ${e.stage}` : e.stage;
+    return [e.championship, stage].filter(Boolean).join(' · ');
+  }
+
   function renderList() {
     if (tg) tg.BackButton.hide();
     const t = today();
-    const upcoming = view.events.filter((e) => e.date >= t);
-    const past = view.events.filter((e) => e.date < t).reverse();
+
+    // Чемпионаты из событий человека; выбор, которого больше нет, игнорируется.
+    const champs = [...new Set(view.events.map(champKey))].sort((a, b) =>
+      a === NO_CHAMP ? 1 : b === NO_CHAMP ? -1 : a.localeCompare(b, 'ru'),
+    );
+    const active = champFilter.filter((c) => champs.includes(c));
+    const shown = active.length ? view.events.filter((e) => active.includes(champKey(e))) : view.events;
+
+    const upcoming = shown.filter((e) => e.date >= t);
+    const past = shown.filter((e) => e.date < t).reverse();
     const list = tab === 'upcoming' ? upcoming : past;
 
     const items = list
       .map((e) => {
         const meta = [fmtDate(e.date), fmtTime(e), e.track].filter(Boolean).map(esc).join(' · ');
+        const champ = champLabel(e);
+        const champLine = champ ? `<div class="champ">${esc(champ)}</div>` : '';
         return `<button class="card ${e.cancelled ? 'cancelled' : ''}" data-id="${esc(e.id)}">
+          ${champLine}
           <div class="row"><div class="title">${esc(e.title)}</div>${badges(e)}</div>
           <div class="meta">${meta}</div>
         </button>`;
       })
       .join('');
 
+    const chips =
+      champs.length > 1 || (champs.length === 1 && champs[0] !== NO_CHAMP)
+        ? `<div class="chips">
+            <button class="chip ${active.length ? '' : 'on'}" data-champ="">Все</button>
+            ${champs
+              .map(
+                (c) =>
+                  `<button class="chip ${active.includes(c) ? 'on' : ''}" data-champ="${esc(c)}">${esc(c === NO_CHAMP ? 'Без чемпионата' : c)}</button>`,
+              )
+              .join('')}
+          </div>`
+        : '';
+
     app.innerHTML = `
+      ${chips}
       <div class="tabs">
         <button class="tab ${tab === 'upcoming' ? 'on' : ''}" data-tab="upcoming">Предстоящие (${upcoming.length})</button>
         <button class="tab ${tab === 'past' ? 'on' : ''}" data-tab="past">Прошедшие (${past.length})</button>
@@ -72,6 +149,15 @@
     app.querySelectorAll('[data-tab]').forEach((b) =>
       b.addEventListener('click', () => {
         tab = b.dataset.tab;
+        renderList();
+      }),
+    );
+    app.querySelectorAll('[data-champ]').forEach((b) =>
+      b.addEventListener('click', () => {
+        const c = b.dataset.champ;
+        if (!c) champFilter = [];
+        else champFilter = active.includes(c) ? active.filter((x) => x !== c) : [...active, c];
+        saveFilter();
         renderList();
       }),
     );
@@ -111,9 +197,16 @@
         : esc(e.rules)
       : '';
 
-    const pilotsTitle = e.format === 'team' ? 'Состав команды' : 'Участники';
-    const pilots = e.pilots || [];
-    const managers = e.managers || [];
+    const defaultTitle = e.format === 'team' ? 'Состав команды' : 'Участники';
+    const crews = (e.crews || [])
+      .map(
+        (c) => `<div class="section crew ${c.mine ? 'mine' : ''}">
+          <h3>${esc(c.name || defaultTitle)}${c.mine ? ' <span class="you">ваш состав</span>' : ''}</h3>
+          ${c.pilots.map(personLine).join('')}
+          ${c.managers.length ? `<div class="role-label">Менеджер</div>${c.managers.map(personLine).join('')}` : ''}
+        </div>`,
+      )
+      .join('');
 
     app.innerHTML = `
       ${tg ? '' : '<button class="back">‹ Назад</button>'}
@@ -122,6 +215,7 @@
           <div class="title" style="font-weight:700;font-size:19px">${esc(e.title)}</div>
           ${badges(e)}
         </div>
+        ${champLabel(e) ? `<div class="champ" style="margin-top:4px">${esc(champLabel(e))}</div>` : ''}
         <div class="meta small" style="margin-top:4px">${esc(fmtDate(e.date))}${e.start ? ' · ' + esc(fmtTime(e)) : ''}</div>
       </div>
       <div class="section">
@@ -132,8 +226,7 @@
         ${kv('Регламент', rules)}
       </div>
       ${e.description ? `<div class="section"><h3>Описание</h3><div class="desc">${esc(e.description)}</div></div>` : ''}
-      ${pilots.length ? `<div class="section"><h3>${pilotsTitle}</h3>${pilots.map(personLine).join('')}</div>` : ''}
-      ${managers.length ? `<div class="section"><h3>Менеджер</h3>${managers.map(personLine).join('')}</div>` : ''}
+      ${crews}
       ${e.cancelled ? '' : '<button class="cal">Добавить в Google Календарь</button>'}
     `;
     const back = app.querySelector('.back');
@@ -172,6 +265,7 @@
         return state('Нет доступа', `Попросите администратора добавить ${id} на лист «Люди» в таблице команды.`);
       }
       who.innerHTML = `${esc(view.me.name)}<br>${esc(roleNames(view.me.roles))}`;
+      champFilter = await loadFilter();
       renderList();
     } catch (e) {
       state('Нет связи', 'Проверьте интернет и откройте приложение снова.');

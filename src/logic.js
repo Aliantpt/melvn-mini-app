@@ -68,30 +68,48 @@ export function parseFormat(v) {
   return '';
 }
 
-// Участники и менеджер указываются прямо в строке события.
+// Составы указываются прямо в таблице событий. Одна строка — один состав.
+// Если в гонке несколько составов, добавляется ещё строка с тем же ID:
+// в ней достаточно заполнить «Состав», «Менеджер» и «Пилоты», остальное
+// берётся из первой строки события.
 export function buildEvents(eventRows) {
+  const byId = new Map();
   const events = [];
   for (const r of eventRows || []) {
     const id = String(r['ID'] || '').trim();
-    const date = parseDate(r['Дата']);
-    if (!id || !date) continue;
-    events.push({
-      id,
-      type: String(r['Тип'] || '').trim() || 'Событие',
-      format: parseFormat(r['Формат']),
-      title: String(r['Название'] || '').trim() || id,
-      date,
-      start: parseTime(r['Начало']),
-      end: parseTime(r['Окончание']),
-      track: String(r['Трасса'] || '').trim(),
-      address: String(r['Адрес'] || '').trim(),
-      cost: String(r['Стоимость'] || '').trim(),
-      rules: String(r['Регламент'] || '').trim(),
-      description: String(r['Описание'] || '').trim(),
-      cancelled: String(r['Статус'] || '').trim().toLowerCase().startsWith('отмен'),
+    if (!id) continue;
+    let e = byId.get(id);
+    if (!e) {
+      const date = parseDate(r['Дата']);
+      if (!date) continue;
+      e = {
+        id,
+        type: String(r['Тип'] || '').trim() || 'Событие',
+        format: parseFormat(r['Формат']),
+        championship: String(r['Чемпионат'] || '').trim(),
+        stage: String(r['Этап'] || '').trim(),
+        title: String(r['Название'] || '').trim(),
+        date,
+        start: parseTime(r['Начало']),
+        end: parseTime(r['Окончание']),
+        track: String(r['Трасса'] || '').trim(),
+        address: String(r['Адрес'] || '').trim(),
+        cost: String(r['Стоимость'] || '').trim(),
+        rules: String(r['Регламент'] || '').trim(),
+        description: String(r['Описание'] || '').trim(),
+        cancelled: String(r['Статус'] || '').trim().toLowerCase().startsWith('отмен'),
+        crews: [],
+      };
+      if (!e.title) e.title = [e.championship, e.stage].filter(Boolean).join(', ') || id;
+      byId.set(id, e);
+      events.push(e);
+    }
+    const crew = {
+      name: String(r['Состав'] || '').trim(),
       managers: splitHandles(r['Менеджер']),
       pilots: splitHandles(r['Пилоты']),
-    });
+    };
+    if (crew.name || crew.managers.length || crew.pilots.length) e.crews.push(crew);
   }
   return events;
 }
@@ -105,12 +123,14 @@ export function findPerson(people, tgUser) {
 
 const listsPerson = (list, person) => list.some((k) => person.keys.includes(k));
 
-// Руководство видит всё; остальные — только события, куда админ вписал их
-// пилотом или менеджером.
+const inCrew = (c, person) => listsPerson(c.pilots, person) || listsPerson(c.managers, person);
+
+// Руководство видит всё; остальные — только события, где их вписали
+// пилотом или менеджером хотя бы одного состава. Все составы гонки видны.
 export function visibleEvents(events, person) {
   if (!person || !person.active) return [];
   if (person.roles.leadership) return events;
-  return events.filter((e) => listsPerson(e.pilots, person) || listsPerson(e.managers, person));
+  return events.filter((e) => e.crews.some((c) => inCrew(c, person)));
 }
 
 function stamp(date, time) {
@@ -127,14 +147,17 @@ export const FORMAT_LABEL = { team: 'Командная', solo: 'Личная' }
 
 export function calendarDetails(event, nameOf) {
   const lines = [[event.type, FORMAT_LABEL[event.format]].filter(Boolean).join(', ')];
+  const champ = [event.championship, event.stage].filter(Boolean).join(', ');
+  if (champ && champ !== event.title) lines.push(`Чемпионат: ${champ}`);
   if (event.track) lines.push(`Трасса: ${event.track}`);
   if (event.cost) lines.push(`Стоимость: ${event.cost}`);
   if (event.rules) lines.push(`Регламент: ${event.rules}`);
   if (event.description) lines.push('', event.description);
-  if (event.pilots.length) {
-    lines.push('', `${event.format === 'team' ? 'Состав команды' : 'Участники'}: ${event.pilots.map(nameOf).join(', ')}`);
+  for (const c of event.crews) {
+    lines.push('', `${c.name || (event.format === 'team' ? 'Состав команды' : 'Участники')}:`);
+    if (c.pilots.length) lines.push(`Пилоты: ${c.pilots.map(nameOf).join(', ')}`);
+    if (c.managers.length) lines.push(`Менеджер: ${c.managers.map(nameOf).join(', ')}`);
   }
-  if (event.managers.length) lines.push(`Менеджер: ${event.managers.map(nameOf).join(', ')}`);
   return lines.join('\n');
 }
 
@@ -186,6 +209,8 @@ export function buildView(data, tgUser, timezone) {
       id: e.id,
       type: e.type,
       format: e.format,
+      championship: e.championship,
+      stage: e.stage,
       title: e.title,
       date: `${e.date.y}-${pad(e.date.m)}-${pad(e.date.d)}`,
       start: e.start ? `${pad(e.start.h)}:${pad(e.start.min)}` : '',
@@ -197,8 +222,12 @@ export function buildView(data, tgUser, timezone) {
       description: e.description,
       cancelled: e.cancelled,
       calendarUrl: googleCalendarUrl(e, timezone, nameOf),
-      pilots: e.pilots.map(personCard),
-      managers: e.managers.map(personCard),
+      crews: e.crews.map((c) => ({
+        name: c.name,
+        pilots: c.pilots.map(personCard),
+        managers: c.managers.map(personCard),
+        mine: inCrew(c, person),
+      })),
     }))
     .sort((a, b) => (a.date + a.start).localeCompare(b.date + b.start));
 

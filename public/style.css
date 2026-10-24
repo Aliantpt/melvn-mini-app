@@ -62,7 +62,9 @@ main { padding: 12px 16px 32px; }
 .kv span:first-child { color: var(--hint); }
 .kv span:last-child { text-align: right; }
 .person { padding: 6px 0; border-top: 1px solid var(--line); }
-.section h3 + .person { border-top: 0; }
+.section h3 + .person, .role-label + .person { border-top: 0; }
+.crew.mine { box-shadow: inset 3px 0 0 var(--orange); }
+.role-label { margin-top: 10px; padding-top: 8px; border-top: 1px solid var(--line); font-size: 12px; color: var(--hint); text-transform: uppercase; letter-spacing: .03em; }
 .person a { text-decoration: none; border-bottom: 1px solid var(--orange); }
 .you { font-size: 11px; font-weight: 700; color: var(--orange); text-transform: uppercase; margin-left: 4px; }
 .badges { display: inline-flex; gap: 4px; flex-wrap: wrap; justify-content: flex-end; }
@@ -73,3 +75,11 @@ main { padding: 12px 16px 32px; }
   background: var(--btn); color: var(--btn-text); font: inherit; font-weight: 600;
 }
 .desc { white-space: pre-wrap; }
+.chips { display: flex; gap: 6px; overflow-x: auto; margin: 0 -16px 10px; padding: 0 16px; scrollbar-width: none; }
+.chips::-webkit-scrollbar { display: none; }
+.chip {
+  flex: none; border: 1px solid var(--line); background: var(--bg); color: var(--text);
+  font: inherit; font-size: 13px; padding: 6px 12px; border-radius: 999px;
+}
+.chip.on { background: var(--white); color: var(--carbon); border-color: var(--white); font-weight: 600; }
+.champ { color: var(--orange); font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: .03em; margin-bottom: 2px; }
