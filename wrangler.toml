@@ -1,0 +1,15 @@
+name = "melvn-mini-app"
+main = "src/worker.js"
+compatibility_date = "2025-06-01"
+
+[assets]
+directory = "./public"
+binding = "ASSETS"
+
+[vars]
+TIMEZONE = "Europe/Moscow"
+
+# Секреты задаются в панели Cloudflare (Settings → Variables and Secrets), не здесь:
+# BOT_TOKEN   — токен бота от BotFather
+# SHEET_URL   — URL веб-приложения Apps Script
+# SHEET_TOKEN — ключ из google/apps-script.gs
