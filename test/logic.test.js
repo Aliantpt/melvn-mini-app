@@ -1,52 +1,56 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { buildView, googleCalendarUrl, buildEvents, parseDate } from '../src/logic.js';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 import { createHmac } from 'node:crypto';
+import { buildView, googleCalendarUrl, buildEvents, parseDate } from '../src/logic.js';
 
 const data = {
   'Люди': [
     { Telegram: 'ivan_petrov', 'Имя': 'Иван Петров', 'Пилот': 'Да', 'Менеджер': 'Нет', 'Руководство': 'Нет', 'Активен': 'Да' },
-    { Telegram: '@Anna_Smirnova', 'Имя': 'Анна', 'Пилот': 'Да', 'Менеджер': 'Нет', 'Руководство': 'Нет', 'Активен': 'Да' },
-    { Telegram: 'max_kart', 'Имя': 'Максим', 'Пилот': 'Да', 'Менеджер': 'Нет', 'Руководство': 'Нет', 'Активен': 'Нет' },
-    { Telegram: 'oleg_manager', 'Имя': 'Олег', 'Пилот': 'Да', 'Менеджер': 'Да', 'Руководство': 'Нет', 'Активен': 'Да' },
-    { Telegram: 'melvn_boss', 'Имя': 'Босс', 'Пилот': 'Нет', 'Менеджер': 'Нет', 'Руководство': 'Да', 'Активен': 'Да' },
-    { Telegram: '123456', 'Имя': 'Без ника', 'Пилот': 'Да', 'Активен': '' },
+    { Telegram: '@Anna_Smirnova', 'Telegram ID': '555', 'Имя': 'Анна', 'Пилот': 'Да', 'Активен': 'Да' },
+    { Telegram: 'max_kart', 'Имя': 'Максим', 'Пилот': 'Да', 'Активен': 'Нет' },
+    { Telegram: 'oleg_manager', 'Имя': 'Олег', 'Пилот': 'Да', 'Менеджер': 'Да', 'Активен': 'Да' },
+    { Telegram: 'melvn_boss', 'Имя': 'Босс', 'Руководство': 'Да', 'Активен': 'Да' },
+    { Telegram: '', 'Telegram ID': '123456', 'Имя': 'Без ника', 'Пилот': 'Да', 'Активен': '' },
   ],
   'События': [
-    { ID: 'R1', 'Тип': 'Гонка', 'Название': 'Этап 3', 'Дата': '15.11.2026', 'Начало': '10:00', 'Окончание': '18:00', 'Трасса': 'Картодром', 'Статус': 'Запланировано' },
-    { ID: 'T1', 'Тип': 'Тренировка', 'Название': 'Тренировка', 'Дата': '08.11.2026', 'Начало': '', 'Статус': 'Отменено' },
-    { ID: 'T2', 'Тип': 'Тренировка', 'Название': 'Пилот-менеджер едет', 'Дата': '2026-11-20', 'Начало': '12:00' },
+    { ID: 'R1', 'Тип': 'Гонка', 'Формат': 'Командная', 'Название': 'Этап 3', 'Дата': '15.11.2026', 'Начало': '10:00', 'Окончание': '18:00', 'Трасса': 'Картодром', 'Менеджер': 'oleg_manager', 'Пилоты': 'ivan_petrov, 555' },
+    { ID: 'R2', 'Тип': 'Гонка', 'Формат': 'Личная', 'Название': 'Личка', 'Дата': '22.11.2026', 'Начало': '11:00', 'Менеджер': '', 'Пилоты': 'max_kart; oleg_manager' },
+    { ID: 'T1', 'Тип': 'Тренировка', 'Название': 'Тренировка', 'Дата': '08.11.2026', 'Статус': 'Отменено', 'Пилоты': 'anna_smirnova, 123456' },
+    { ID: 'X1', 'Тип': 'Гонка', 'Название': 'Чужая гонка', 'Дата': '29.11.2026', 'Пилоты': 'someone_else' },
     { ID: 'BAD', 'Тип': 'Гонка', 'Название': 'Без даты', 'Дата': '' },
-  ],
-  'Составы': [
-    { 'ID события': 'R1', 'Экипаж': '#11', 'Номер карта': '11', 'Менеджер': 'oleg_manager', 'Пилоты': 'ivan_petrov, @anna_smirnova' },
-    { 'ID события': 'R1', 'Экипаж': '#12', 'Менеджер': 'oleg_manager', 'Пилоты': 'max_kart' },
-    { 'ID события': 'T1', 'Экипаж': 'Трен', 'Менеджер': '', 'Пилоты': 'anna_smirnova; 123456' },
-    { 'ID события': 'T2', 'Экипаж': 'Трен', 'Менеджер': 'melvn_boss', 'Пилоты': 'oleg_manager' },
   ],
 };
 
 const ids = (v) => v.events.map((e) => e.id).sort();
 
-test('pilot sees only own events but all crews there', () => {
+test('pilot sees only races the admin put them in', () => {
   const v = buildView(data, { id: 1, username: 'Ivan_Petrov' }, 'Europe/Moscow');
   assert.equal(v.access, true);
   assert.deepEqual(ids(v), ['R1']);
-  assert.equal(v.events[0].crews.length, 2);
-  assert.equal(v.events[0].crews[0].mine, true);
-  assert.equal(v.events[0].crews[1].mine, false);
+  assert.deepEqual(v.events[0].pilots.map((p) => p.name), ['Иван Петров', 'Анна']);
+  assert.equal(v.events[0].pilots[0].me, true);
+  assert.equal(v.events[0].format, 'team');
 });
 
-test('pilot + manager sees union of both roles', () => {
+test('manager sees races where they are manager or pilot, not all races', () => {
   const v = buildView(data, { id: 2, username: 'oleg_manager' });
-  assert.deepEqual(ids(v), ['R1', 'T2']);
+  assert.deepEqual(ids(v), ['R1', 'R2']);
 });
 
-test('leadership sees everything with a valid date', () => {
+test('leadership sees every race with a valid date', () => {
   const v = buildView(data, { id: 3, username: 'melvn_boss' });
-  assert.deepEqual(ids(v), ['R1', 'T1', 'T2']);
+  assert.deepEqual(ids(v), ['R1', 'R2', 'T1', 'X1']);
+});
+
+test('participants can be listed by nick or by Telegram ID', () => {
+  const anna = buildView(data, { id: 555 });
+  assert.equal(anna.access, true);
+  assert.deepEqual(ids(anna), ['R1', 'T1']);
+  const noNick = buildView(data, { id: 123456 });
+  assert.deepEqual(ids(noNick), ['T1']);
+  assert.equal(noNick.events[0].cancelled, true);
 });
 
 test('inactive or unknown person has no access', () => {
@@ -56,31 +60,25 @@ test('inactive or unknown person has no access', () => {
   assert.equal(v.username, 'stranger');
 });
 
-test('person can be matched by numeric Telegram ID', () => {
-  const v = buildView(data, { id: 123456 });
-  assert.equal(v.access, true);
-  assert.deepEqual(ids(v), ['T1']);
-  assert.equal(v.events[0].cancelled, true);
-});
-
 test('events are sorted by date', () => {
   const v = buildView(data, { username: 'melvn_boss' });
-  assert.deepEqual(v.events.map((e) => e.id), ['T1', 'R1', 'T2']);
+  assert.deepEqual(v.events.map((e) => e.id), ['T1', 'R1', 'R2', 'X1']);
 });
 
-test('calendar link: timed and all-day', () => {
-  const [r1, t1] = buildEvents(data['События'], data['Составы']);
+test('calendar link: timed and all-day, with participants', () => {
+  const [r1, , t1] = buildEvents(data['События']);
   const u = new URL(googleCalendarUrl(r1, 'Europe/Moscow'));
   assert.equal(u.searchParams.get('dates'), '20261115T100000/20261115T180000');
   assert.equal(u.searchParams.get('ctz'), 'Europe/Moscow');
-  assert.match(u.searchParams.get('details'), /#11/);
+  assert.match(u.searchParams.get('details'), /Гонка, Командная/);
+  assert.match(u.searchParams.get('details'), /Состав команды: @ivan_petrov/);
   const a = new URL(googleCalendarUrl(t1, 'Europe/Moscow'));
   assert.equal(a.searchParams.get('dates'), '20261108/20261109');
   assert.equal(a.searchParams.get('ctz'), null);
 });
 
 test('calendar all-day across month end', () => {
-  const [e] = buildEvents([{ ID: 'X', 'Дата': '31.12.2026' }], []);
+  const [e] = buildEvents([{ ID: 'X', 'Дата': '31.12.2026' }]);
   assert.equal(new URL(googleCalendarUrl(e)).searchParams.get('dates'), '20261231/20270101');
 });
 
@@ -91,13 +89,16 @@ test('parseDate formats', () => {
 
 // Запуск собранного dist/Code.gs в песочнице с заглушками сервисов Google.
 function loadGas(botToken, sheets) {
-  const code = readFileSync(new URL('../dist/Code.gs', import.meta.url), 'utf8').replace('ВСТАВЬТЕ_ТОКЕН_БОТА', botToken);
+  const code = readFileSync(new URL('../dist/Code.gs', import.meta.url), 'utf8');
   const signed = (buf) => [...buf].map((b) => (b > 127 ? b - 256 : b));
+  const unsigned = (arr) => Buffer.from(arr.map((b) => (b + 256) % 256));
   const ctx = {
     Utilities: {
       newBlob: (s) => ({ getBytes: () => signed(Buffer.from(s, 'utf8')) }),
-      computeHmacSha256Signature: (value, key) =>
-        signed(createHmac('sha256', Buffer.from(key.map((b) => (b + 256) % 256))).update(Buffer.from(value.map((b) => (b + 256) % 256))).digest()),
+      computeHmacSha256Signature: (value, key) => signed(createHmac('sha256', unsigned(key)).update(unsigned(value)).digest()),
+    },
+    PropertiesService: {
+      getScriptProperties: () => ({ getProperty: (k) => (k === 'BOT_TOKEN' ? botToken : null) }),
     },
     ContentService: {
       MimeType: { JSON: 'json' },
@@ -126,7 +127,7 @@ const sheetTable = (rows) => {
   const headers = Object.keys(Object.assign({}, ...rows));
   return [headers, headers.map(() => 'подсказка'), ...rows.map((r) => headers.map((h) => r[h] ?? '')), headers.map(() => '')];
 };
-const gasSheets = { 'Люди': sheetTable(data['Люди']), 'События': sheetTable(data['События']), 'Составы': sheetTable(data['Составы']) };
+const gasSheets = { 'Люди': sheetTable(data['Люди']), 'События': sheetTable(data['События']) };
 
 test('Apps Script: valid initData returns the pilot view', () => {
   const doGet = loadGas('123:ABC', gasSheets);
@@ -137,7 +138,7 @@ test('Apps Script: valid initData returns the pilot view', () => {
   assert.match(v.events[0].calendarUrl, /^https:\/\/calendar\.google\.com\/calendar\/render\?action=TEMPLATE/);
 });
 
-test('Apps Script: forged, wrong-token, stale or missing initData is rejected', () => {
+test('Apps Script: forged, wrong-token, stale, missing initData or unset token is rejected', () => {
   const doGet = loadGas('123:ABC', gasSheets);
   assert.equal(doGet({}).error, 'not_telegram');
   assert.equal(doGet({ initData: signInitData('123:WRONG', { id: 1, username: 'melvn_boss' }).toString() }).error, 'not_telegram');
@@ -146,4 +147,6 @@ test('Apps Script: forged, wrong-token, stale or missing initData is rejected', 
   assert.equal(doGet({ initData: forged.toString() }).error, 'not_telegram');
   const old = signInitData('123:ABC', { id: 42, username: 'ivan_petrov' }, 1000);
   assert.equal(doGet({ initData: old.toString() }).error, 'not_telegram');
+  const noToken = loadGas(null, gasSheets);
+  assert.equal(noToken({ initData: signInitData('', { id: 42, username: 'ivan_petrov' }).toString() }).error, 'not_telegram');
 });

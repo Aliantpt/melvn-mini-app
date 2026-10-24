@@ -1,12 +1,18 @@
 :root {
-  --bg: var(--tg-theme-bg-color, #ffffff);
-  --bg2: var(--tg-theme-secondary-bg-color, #f2f3f5);
-  --text: var(--tg-theme-text-color, #111111);
-  --hint: var(--tg-theme-hint-color, #8a8f98);
-  --link: var(--tg-theme-link-color, #2a7de1);
-  --btn: var(--tg-theme-button-color, #e3262f);
-  --btn-text: var(--tg-theme-button-text-color, #ffffff);
-  --accent: #e3262f;
+  /* Командные цвета M-ELVN */
+  --orange: #ff5a00;   /* Signal Orange — акцент */
+  --carbon: #101011;   /* Carbon — фон */
+  --white: #ffffff;    /* White — текст на тёмном */
+  --bg: #1b1b1d;       /* карточки, чуть светлее фона */
+  --bg2: var(--carbon);
+  --text: var(--white);
+  --hint: #9a9aa0;
+  --line: #2a2a2d;
+  --link: var(--white);
+  --btn: var(--orange);
+  --btn-text: var(--white);
+  --accent: var(--orange);
+  color-scheme: dark;
 }
 * { box-sizing: border-box; }
 body {
@@ -17,6 +23,7 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 a { color: var(--link); }
+.kv a { color: var(--orange); }
 .top {
   display: flex; align-items: center; justify-content: space-between;
   padding: 12px 16px; background: var(--bg);
@@ -43,9 +50,9 @@ main { padding: 12px 16px 32px; }
 .card .meta { color: var(--hint); font-size: 13px; margin-top: 2px; }
 .badge {
   display: inline-block; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .03em;
-  padding: 2px 7px; border-radius: 6px; background: var(--bg2); color: var(--hint); white-space: nowrap;
+  padding: 2px 7px; border-radius: 6px; background: var(--line); color: var(--hint); white-space: nowrap;
 }
-.badge.race { background: var(--accent); color: #fff; }
+.badge.race { background: var(--orange); color: var(--white); }
 .badge.off { background: #777; color: #fff; }
 .cancelled .title { text-decoration: line-through; }
 .back { border: 0; background: none; color: var(--link); font: inherit; padding: 0 0 10px; }
@@ -54,11 +61,11 @@ main { padding: 12px 16px 32px; }
 .kv { display: flex; justify-content: space-between; gap: 12px; padding: 4px 0; }
 .kv span:first-child { color: var(--hint); }
 .kv span:last-child { text-align: right; }
-.crew { padding: 8px 0; border-top: 1px solid var(--bg2); }
-.crew:first-of-type { border-top: 0; }
-.crew.mine .crew-name::after { content: " • ваш экипаж"; color: var(--accent); font-weight: 600; font-size: 12px; }
-.crew-name { font-weight: 600; }
-.person { padding: 2px 0; }
+.person { padding: 6px 0; border-top: 1px solid var(--line); }
+.section h3 + .person { border-top: 0; }
+.person a { text-decoration: none; border-bottom: 1px solid var(--orange); }
+.you { font-size: 11px; font-weight: 700; color: var(--orange); text-transform: uppercase; margin-left: 4px; }
+.badges { display: inline-flex; gap: 4px; flex-wrap: wrap; justify-content: flex-end; }
 .person.me { font-weight: 600; }
 .small { color: var(--hint); font-size: 13px; }
 .cal {

@@ -9,6 +9,11 @@
   if (tg) {
     tg.ready();
     tg.expand();
+    // Командные цвета в шапке и фоне Telegram.
+    try {
+      tg.setHeaderColor('#101011');
+      tg.setBackgroundColor('#101011');
+    } catch (e) {}
   }
 
   const esc = (s) =>
@@ -49,12 +54,9 @@
 
     const items = list
       .map((e) => {
-        const badge = e.cancelled
-          ? '<span class="badge off">Отменено</span>'
-          : `<span class="badge ${/гонк/i.test(e.type) ? 'race' : ''}">${esc(e.type)}</span>`;
         const meta = [fmtDate(e.date), fmtTime(e), e.track].filter(Boolean).map(esc).join(' · ');
         return `<button class="card ${e.cancelled ? 'cancelled' : ''}" data-id="${esc(e.id)}">
-          <div class="row"><div class="title">${esc(e.title)}</div>${badge}</div>
+          <div class="row"><div class="title">${esc(e.title)}</div>${badges(e)}</div>
           <div class="meta">${meta}</div>
         </button>`;
       })
@@ -78,9 +80,19 @@
     );
   }
 
+  const FORMAT = { team: 'Командная', solo: 'Личная' };
+
+  function badges(e) {
+    if (e.cancelled) return '<span class="badge off">Отменено</span>';
+    const type = `<span class="badge ${/гонк/i.test(e.type) ? 'race' : ''}">${esc(e.type)}</span>`;
+    const format = FORMAT[e.format] ? `<span class="badge">${FORMAT[e.format]}</span>` : '';
+    return `<span class="badges">${type}${format}</span>`;
+  }
+
   function personLine(p) {
     const phone = p.phone ? ` <span class="small">${esc(p.phone)}</span>` : '';
-    return `<div class="person ${p.me ? 'me' : ''}"><a href="https://t.me/${esc(p.handle)}" data-ext>${esc(p.name)}</a>${phone}</div>`;
+    const name = p.handle ? `<a href="https://t.me/${esc(p.handle)}" data-ext>${esc(p.name)}</a>` : esc(p.name);
+    return `<div class="person ${p.me ? 'me' : ''}">${name}${p.me ? ' <span class="you">вы</span>' : ''}${phone}</div>`;
   }
 
   function renderEvent(id) {
@@ -99,22 +111,16 @@
         : esc(e.rules)
       : '';
 
-    const crews = e.crews
-      .map(
-        (c) => `<div class="crew ${c.mine ? 'mine' : ''}">
-          <div class="crew-name">${esc(c.name || 'Экипаж')}${c.kart ? ` <span class="small">карт №${esc(c.kart)}</span>` : ''}</div>
-          ${c.pilots.map(personLine).join('')}
-          ${c.managers.length ? `<div class="small" style="margin-top:4px">Менеджер:</div>${c.managers.map(personLine).join('')}` : ''}
-        </div>`,
-      )
-      .join('');
+    const pilotsTitle = e.format === 'team' ? 'Состав команды' : 'Участники';
+    const pilots = e.pilots || [];
+    const managers = e.managers || [];
 
     app.innerHTML = `
       ${tg ? '' : '<button class="back">‹ Назад</button>'}
       <div class="section">
         <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px">
           <div class="title" style="font-weight:700;font-size:19px">${esc(e.title)}</div>
-          ${e.cancelled ? '<span class="badge off">Отменено</span>' : `<span class="badge ${/гонк/i.test(e.type) ? 'race' : ''}">${esc(e.type)}</span>`}
+          ${badges(e)}
         </div>
         <div class="meta small" style="margin-top:4px">${esc(fmtDate(e.date))}${e.start ? ' · ' + esc(fmtTime(e)) : ''}</div>
       </div>
@@ -126,7 +132,8 @@
         ${kv('Регламент', rules)}
       </div>
       ${e.description ? `<div class="section"><h3>Описание</h3><div class="desc">${esc(e.description)}</div></div>` : ''}
-      ${crews ? `<div class="section"><h3>Составы</h3>${crews}</div>` : ''}
+      ${pilots.length ? `<div class="section"><h3>${pilotsTitle}</h3>${pilots.map(personLine).join('')}</div>` : ''}
+      ${managers.length ? `<div class="section"><h3>Менеджер</h3>${managers.map(personLine).join('')}</div>` : ''}
       ${e.cancelled ? '' : '<button class="cal">Добавить в Google Календарь</button>'}
     `;
     const back = app.querySelector('.back');

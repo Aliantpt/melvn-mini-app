@@ -37,14 +37,17 @@ export function parseTime(v) {
 
 const pad = (n) => String(n).padStart(2, '0');
 
+// Человека можно указать ником или числовым Telegram ID — подходят оба.
 export function buildPeople(rows) {
   const people = [];
   for (const r of rows || []) {
-    const handle = normHandle(r['Telegram']);
-    if (!handle) continue;
+    const keys = [normHandle(r['Telegram']), normHandle(r['Telegram ID'])].filter(Boolean);
+    if (!keys.length) continue;
     people.push({
-      handle,
-      name: String(r['Имя'] || '').trim() || '@' + handle,
+      key: keys[0],
+      keys,
+      handle: /^\d+$/.test(keys[0]) ? '' : keys[0],
+      name: String(r['Имя'] || '').trim() || '@' + keys[0],
       phone: String(r['Телефон'] || '').trim(),
       active: String(r['Активен'] || '').trim().toLowerCase() !== 'нет',
       roles: {
@@ -57,21 +60,16 @@ export function buildPeople(rows) {
   return people;
 }
 
-export function buildEvents(eventRows, crewRows) {
-  const crewsByEvent = new Map();
-  for (const r of crewRows || []) {
-    const eventId = String(r['ID события'] || '').trim();
-    if (!eventId) continue;
-    const crew = {
-      name: String(r['Экипаж'] || '').trim(),
-      kart: String(r['Номер карта'] || '').trim(),
-      managers: splitHandles(r['Менеджер']),
-      pilots: splitHandles(r['Пилоты']),
-    };
-    if (!crewsByEvent.has(eventId)) crewsByEvent.set(eventId, []);
-    crewsByEvent.get(eventId).push(crew);
-  }
+// «Командная» / «Личная»; пусто — не указан.
+export function parseFormat(v) {
+  const s = String(v ?? '').trim().toLowerCase();
+  if (s.startsWith('команд')) return 'team';
+  if (s.startsWith('личн')) return 'solo';
+  return '';
+}
 
+// Участники и менеджер указываются прямо в строке события.
+export function buildEvents(eventRows) {
   const events = [];
   for (const r of eventRows || []) {
     const id = String(r['ID'] || '').trim();
@@ -80,6 +78,7 @@ export function buildEvents(eventRows, crewRows) {
     events.push({
       id,
       type: String(r['Тип'] || '').trim() || 'Событие',
+      format: parseFormat(r['Формат']),
       title: String(r['Название'] || '').trim() || id,
       date,
       start: parseTime(r['Начало']),
@@ -90,7 +89,8 @@ export function buildEvents(eventRows, crewRows) {
       rules: String(r['Регламент'] || '').trim(),
       description: String(r['Описание'] || '').trim(),
       cancelled: String(r['Статус'] || '').trim().toLowerCase().startsWith('отмен'),
-      crews: crewsByEvent.get(id) || [],
+      managers: splitHandles(r['Менеджер']),
+      pilots: splitHandles(r['Пилоты']),
     });
   }
   return events;
@@ -100,21 +100,17 @@ export function findPerson(people, tgUser) {
   const keys = new Set();
   if (tgUser?.username) keys.add(normHandle(tgUser.username));
   if (tgUser?.id) keys.add(String(tgUser.id));
-  return people.find((p) => keys.has(p.handle)) || null;
+  return people.find((p) => p.keys.some((k) => keys.has(k))) || null;
 }
 
-// Что видит человек: руководство — всё; пилот — события, где он в составе;
-// менеджер — события, где он менеджер экипажа. Роли складываются.
+const listsPerson = (list, person) => list.some((k) => person.keys.includes(k));
+
+// Руководство видит всё; остальные — только события, куда админ вписал их
+// пилотом или менеджером.
 export function visibleEvents(events, person) {
   if (!person || !person.active) return [];
   if (person.roles.leadership) return events;
-  return events.filter((e) =>
-    e.crews.some(
-      (c) =>
-        (person.roles.pilot && c.pilots.includes(person.handle)) ||
-        (person.roles.manager && c.managers.includes(person.handle)),
-    ),
-  );
+  return events.filter((e) => listsPerson(e.pilots, person) || listsPerson(e.managers, person));
 }
 
 function stamp(date, time) {
@@ -127,20 +123,18 @@ function nextDay(date) {
   return { y: t.getUTCFullYear(), m: t.getUTCMonth() + 1, d: t.getUTCDate() };
 }
 
+export const FORMAT_LABEL = { team: 'Командная', solo: 'Личная' };
+
 export function calendarDetails(event, nameOf) {
-  const lines = [event.type];
+  const lines = [[event.type, FORMAT_LABEL[event.format]].filter(Boolean).join(', ')];
   if (event.track) lines.push(`Трасса: ${event.track}`);
   if (event.cost) lines.push(`Стоимость: ${event.cost}`);
   if (event.rules) lines.push(`Регламент: ${event.rules}`);
   if (event.description) lines.push('', event.description);
-  if (event.crews.length) {
-    lines.push('', 'Составы:');
-    for (const c of event.crews) {
-      const title = [c.name, c.kart && `карт №${c.kart}`].filter(Boolean).join(', ');
-      lines.push(`• ${title}: ${c.pilots.map(nameOf).join(', ')}`);
-      if (c.managers.length) lines.push(`  Менеджер: ${c.managers.map(nameOf).join(', ')}`);
-    }
+  if (event.pilots.length) {
+    lines.push('', `${event.format === 'team' ? 'Состав команды' : 'Участники'}: ${event.pilots.map(nameOf).join(', ')}`);
   }
+  if (event.managers.length) lines.push(`Менеджер: ${event.managers.map(nameOf).join(', ')}`);
   return lines.join('\n');
 }
 
@@ -179,17 +173,19 @@ export function buildView(data, tgUser, timezone) {
     };
   }
 
-  const byHandle = new Map(people.map((p) => [p.handle, p]));
-  const nameOf = (h) => byHandle.get(h)?.name || '@' + h;
-  const personCard = (h) => {
-    const p = byHandle.get(h);
-    return { handle: h, name: nameOf(h), phone: p?.phone || '', me: h === person.handle };
+  const byKey = new Map();
+  for (const p of people) for (const k of p.keys) byKey.set(k, p);
+  const nameOf = (k) => byKey.get(k)?.name || (/^\d+$/.test(k) ? 'ID ' + k : '@' + k);
+  const personCard = (k) => {
+    const p = byKey.get(k);
+    return { handle: p ? p.handle : /^\d+$/.test(k) ? '' : k, name: nameOf(k), phone: p?.phone || '', me: p === person };
   };
 
-  const events = visibleEvents(buildEvents(data['События'], data['Составы']), person)
+  const events = visibleEvents(buildEvents(data['События']), person)
     .map((e) => ({
       id: e.id,
       type: e.type,
+      format: e.format,
       title: e.title,
       date: `${e.date.y}-${pad(e.date.m)}-${pad(e.date.d)}`,
       start: e.start ? `${pad(e.start.h)}:${pad(e.start.min)}` : '',
@@ -201,19 +197,14 @@ export function buildView(data, tgUser, timezone) {
       description: e.description,
       cancelled: e.cancelled,
       calendarUrl: googleCalendarUrl(e, timezone, nameOf),
-      crews: e.crews.map((c) => ({
-        name: c.name,
-        kart: c.kart,
-        managers: c.managers.map(personCard),
-        pilots: c.pilots.map(personCard),
-        mine: c.pilots.includes(person.handle) || c.managers.includes(person.handle),
-      })),
+      pilots: e.pilots.map(personCard),
+      managers: e.managers.map(personCard),
     }))
     .sort((a, b) => (a.date + a.start).localeCompare(b.date + b.start));
 
   return {
     access: true,
-    me: { name: person.name, handle: person.handle, roles: person.roles },
+    me: { name: person.name, roles: person.roles },
     events,
     updatedAt: data.updatedAt || null,
   };

@@ -1,14 +1,19 @@
 // Точка входа Google Apps Script. Собирается вместе с logic.js в dist/Code.gs.
 // Приложение вызывает: GET <URL веб-приложения>?initData=<Telegram.WebApp.initData>
 
-const BOT_TOKEN = 'ВСТАВЬТЕ_ТОКЕН_БОТА';
+// Токен бота хранится в свойствах скрипта (Настройки проекта → Свойства скрипта → BOT_TOKEN),
+// чтобы при обновлении кода его не нужно было вписывать заново.
+function botToken() {
+  return PropertiesService.getScriptProperties().getProperty('BOT_TOKEN') || '';
+}
+
 const TIMEZONE = 'Europe/Moscow';
-const SHEETS = ['Люди', 'События', 'Составы'];
+const SHEETS = ['Люди', 'События'];
 const MAX_AUTH_AGE_SECONDS = 7 * 24 * 3600;
 
 function doGet(e) {
   const initData = (e && e.parameter && e.parameter.initData) || '';
-  const user = verifyInitData(initData, BOT_TOKEN);
+  const user = verifyInitData(initData, botToken());
   if (!user) return jsonOut({ error: 'not_telegram' });
   try {
     return jsonOut(buildView(readSheets(), user, TIMEZONE));

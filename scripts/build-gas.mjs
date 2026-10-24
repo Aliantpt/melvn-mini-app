@@ -7,7 +7,7 @@ const read = (p) => readFileSync(new URL(p, root), 'utf8');
 
 const header = `// M-ELVN Mini App — код для Google Apps Script (Расширения → Apps Script).
 // Файл собран автоматически из src/logic.js и src/gas-main.js, правьте исходники.
-// Перед развертыванием впишите токен бота в BOT_TOKEN ниже.
+// Токен бота задаётся один раз: Настройки проекта → Свойства скрипта → BOT_TOKEN.
 
 `;
 const logic = read('src/logic.js').replace(/^export /gm, '');
