@@ -4,6 +4,8 @@
 
 // Точка входа Google Apps Script. Собирается вместе с logic.js в dist/Code.gs.
 // Приложение вызывает: GET <URL веб-приложения>?initData=<Telegram.WebApp.initData>
+// Запись дохода менеджером: те же параметры + action=addIncome&raceId=&amount=&note=
+// Удаление своей записи: action=deleteIncome&id=
 
 // Токен бота хранится в свойствах скрипта (Настройки проекта → Свойства скрипта → BOT_TOKEN),
 // чтобы при обновлении кода его не нужно было вписывать заново.
@@ -12,7 +14,9 @@ function botToken() {
 }
 
 const TIMEZONE = 'Europe/Moscow';
-const SHEETS = ['Люди', 'События'];
+const SHEETS = ['Люди', 'События', 'Заработок'];
+const INCOME_SHEET = 'Заработок';
+const INCOME_HEADERS = ['ID', 'Дата записи', 'Менеджер', 'ID гонки', 'Сумма', 'Комментарий'];
 const MAX_AUTH_AGE_SECONDS = 7 * 24 * 3600;
 
 function doGet(e) {
@@ -20,6 +24,11 @@ function doGet(e) {
   const user = verifyInitData(initData, botToken());
   if (!user) return jsonOut({ error: 'not_telegram' });
   try {
+    const action = e.parameter.action || '';
+    if (action === 'addIncome' || action === 'deleteIncome') {
+      const result = changeIncome(action, e.parameter, user);
+      if (result) return jsonOut(result);
+    }
     return jsonOut(buildView(readSheets(), user, TIMEZONE));
   } catch (err) {
     return jsonOut({ error: 'sheet_unavailable', message: String((err && err.message) || err) });
@@ -44,6 +53,54 @@ function readSheets() {
       });
   });
   return out;
+}
+
+// Запись или удаление дохода. Возвращает объект с ошибкой или null при успехе.
+function changeIncome(action, p, user) {
+  const lock = LockService.getScriptLock();
+  lock.waitLock(10000);
+  try {
+    const data = readSheets();
+    const person = findPerson(buildPeople(data['Люди']), user);
+    if (!person || !person.active) return { error: 'no_access' };
+    const sh = incomeSheet();
+
+    if (action === 'addIncome') {
+      const raceId = String(p.raceId || '').trim();
+      const amount = parseMoney(p.amount);
+      if (!amount || amount < 0) return { error: 'bad_amount' };
+      if (!canAddIncome(buildEvents(data['События']), person, raceId)) return { error: 'not_manager' };
+      const note = String(p.note || '').slice(0, 200);
+      sh.appendRow([Utilities.getUuid(), new Date().toISOString(), person.key, raceId, amount, note]);
+      return null;
+    }
+
+    // deleteIncome: удалить можно только свою запись.
+    const id = String(p.id || '').trim();
+    const values = sh.getDataRange().getDisplayValues();
+    for (let i = values.length - 1; i >= 2; i--) {
+      if (values[i][0] === id && person.keys.includes(normHandle(values[i][2]))) {
+        sh.deleteRow(i + 1);
+        return null;
+      }
+    }
+    return { error: 'not_found' };
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+// Лист «Заработок» создаётся сам при первой записи.
+function incomeSheet() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let sh = ss.getSheetByName(INCOME_SHEET);
+  if (!sh) {
+    sh = ss.insertSheet(INCOME_SHEET);
+    sh.appendRow(INCOME_HEADERS);
+    sh.appendRow(['Заполняется из приложения', 'Не редактировать вручную без нужды', 'Ник или ID', 'ID из «Событий»', 'Рубли', '']);
+    sh.setFrozenRows(2);
+  }
+  return sh;
 }
 
 // Проверка подписи initData:
@@ -286,8 +343,93 @@ function googleCalendarUrl(event, timezone, nameOf = (h) => '@' + h) {
   return 'https://calendar.google.com/calendar/render?' + query;
 }
 
+// «7 000 ₽ с пилота» → 7000; «10.000» → 10000; «1 500,50» → 1500.5; нет числа → 0.
+function parseMoney(v) {
+  const s = String(v ?? '').replace(/[\s\u00a0\u202f]/g, '');
+  const m = s.match(/\d+(?:[.,]\d+)*/);
+  if (!m) return 0;
+  let n = m[0];
+  // Точка или запятая перед ровно тремя цифрами — разделитель тысяч.
+  n = n.replace(/[.,](?=\d{3}(?:[.,]|$))/g, '').replace(',', '.');
+  const x = Number(n);
+  return isFinite(x) ? x : 0;
+}
+
+// Категория для диаграммы: все тренировки вместе, гонки — по чемпионату.
+function financeCategory(e) {
+  if (/трен/i.test(e.type)) return 'Тренировки';
+  return e.championship || 'Без чемпионата';
+}
+
+const isoDate = (d) => `${d.y}-${pad(d.m)}-${pad(d.d)}`;
+
+// Траты пилота: «Стоимость» каждой его (не отменённой) гонки. В командной
+// гонке она делится на число пилотов его состава.
+function buildSpent(events, person) {
+  const items = [];
+  for (const e of events) {
+    if (e.cancelled) continue;
+    const total = parseMoney(e.cost);
+    if (!total) continue;
+    for (const c of e.crews) {
+      if (!listsPerson(c.pilots, person)) continue;
+      const share = e.format === 'team' && c.pilots.length > 1 ? total / c.pilots.length : total;
+      items.push({
+        raceId: e.id,
+        title: e.title,
+        date: isoDate(e.date),
+        category: financeCategory(e),
+        amount: Math.round(share * 100) / 100,
+        // Полная стоимость и число пилотов — чтобы показать «12 000 ₽ ÷ 2».
+        fullCost: share !== total ? total : 0,
+        split: share !== total ? c.pilots.length : 0,
+        note: '',
+      });
+      break;
+    }
+  }
+  return items;
+}
+
+// Доход менеджера: его записи с листа «Заработок».
+function buildEarned(events, person, incomeRows) {
+  const byId = new Map(events.map((e) => [e.id, e]));
+  const items = [];
+  for (const r of incomeRows || []) {
+    const who = normHandle(r['Менеджер']);
+    if (!who || !person.keys.includes(who)) continue;
+    const amount = parseMoney(r['Сумма']);
+    if (!amount) continue;
+    const e = byId.get(String(r['ID гонки'] || '').trim());
+    items.push({
+      id: String(r['ID'] || '').trim(),
+      raceId: e ? e.id : String(r['ID гонки'] || '').trim(),
+      title: e ? e.title : String(r['ID гонки'] || '').trim() || 'Без гонки',
+      date: e ? isoDate(e.date) : String(r['Дата записи'] || '').slice(0, 10),
+      category: e ? financeCategory(e) : 'Без чемпионата',
+      amount,
+      note: String(r['Комментарий'] || '').trim(),
+    });
+  }
+  return items;
+}
+
+// Гонки, за которые менеджер может внести доход.
+function managedRaces(events, person) {
+  return events
+    .filter((e) => e.crews.some((c) => listsPerson(c.managers, person)))
+    .map((e) => ({ id: e.id, title: e.title, date: isoDate(e.date) }))
+    .sort((a, b) => b.date.localeCompare(a.date));
+}
+
+function canAddIncome(events, person, raceId) {
+  const e = events.find((x) => x.id === raceId);
+  return !!e && e.crews.some((c) => listsPerson(c.managers, person));
+}
+
 // Сборка ответа для экрана приложения.
 function buildView(data, tgUser, timezone) {
+  const allEvents = buildEvents(data['События']);
   const people = buildPeople(data['Люди']);
   const person = findPerson(people, tgUser);
   if (!person || !person.active) {
@@ -306,7 +448,7 @@ function buildView(data, tgUser, timezone) {
     return { handle: p ? p.handle : /^\d+$/.test(k) ? '' : k, name: nameOf(k), phone: p?.phone || '', me: p === person };
   };
 
-  const events = visibleEvents(buildEvents(data['События']), person)
+  const events = visibleEvents(allEvents, person)
     .map((e) => ({
       id: e.id,
       type: e.type,
@@ -338,10 +480,18 @@ function buildView(data, tgUser, timezone) {
     }))
     .sort((a, b) => (a.date + a.start).localeCompare(b.date + b.start));
 
+  const races = managedRaces(allEvents, person);
   return {
     access: true,
     me: { name: person.name, roles: person.roles },
     events,
+    finance: {
+      spent: buildSpent(allEvents, person),
+      earned: buildEarned(allEvents, person, data['Заработок']),
+      // Блок «Заработано» — для менеджеров и тех, кого вписали менеджером гонки.
+      canEarn: person.roles.manager || races.length > 0,
+      managedRaces: races,
+    },
     updatedAt: data.updatedAt || null,
   };
 }

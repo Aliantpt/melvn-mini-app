@@ -107,3 +107,39 @@ main { padding: 12px 16px 32px; }
 .cal-count { position: absolute; top: 2px; right: 4px; font-size: 10px; font-weight: 700; }
 .cal-today { display: block; margin: 10px auto 0; border: 1px solid var(--line); background: none; color: var(--text); font: inherit; font-size: 13px; padding: 6px 14px; border-radius: 999px; }
 .cal-caption { color: var(--hint); font-size: 13px; font-weight: 600; text-transform: uppercase; letter-spacing: .03em; margin: 4px 2px 8px; }
+.nav-btn { font-size: 14px; padding: 9px 4px; }
+.fin-period { display: flex; align-items: center; gap: 6px; margin-bottom: 10px; }
+.fin-period .chip { margin-left: 4px; }
+.fin-total { font-size: 30px; font-weight: 800; letter-spacing: -.01em; }
+.fin-compare { color: var(--hint); font-size: 13px; margin-top: 2px; }
+.donut { position: relative; width: 190px; margin: 12px auto 6px; }
+.donut svg { display: block; width: 100%; height: auto; }
+.donut .arc { cursor: pointer; transition: opacity .15s; }
+.donut .arc.dim { opacity: .25; }
+.donut-center { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; pointer-events: none; padding: 0 44px; }
+.donut-label { font-size: 12px; color: var(--hint); line-height: 1.2; }
+.donut-value { font-size: 18px; font-weight: 700; }
+.fin-legend { margin-top: 6px; }
+.fin-row { display: flex; align-items: center; gap: 10px; padding: 8px 6px; border-radius: 8px; cursor: pointer; }
+.fin-row.on { background: var(--line); }
+.swatch { width: 12px; height: 12px; border-radius: 4px; flex: none; }
+.small-sw { width: 8px; height: 8px; border-radius: 3px; }
+.fin-name { flex: 1; }
+.fin-pct { color: var(--hint); font-size: 13px; min-width: 38px; text-align: right; }
+.fin-amt { font-weight: 600; white-space: nowrap; text-align: right; }
+.fin-item { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-top: 1px solid var(--line); }
+.fin-item-main { flex: 1; min-width: 0; }
+.fin-del { border: 0; background: var(--line); color: var(--hint); width: 28px; height: 28px; border-radius: 8px; font-size: 18px; line-height: 1; flex: none; }
+.fin-form { display: flex; flex-direction: column; gap: 6px; }
+.fin-form select, .fin-form input {
+  font: inherit; color: var(--text); background: var(--carbon); border: 1px solid var(--line);
+  border-radius: 10px; padding: 10px 12px; width: 100%;
+}
+.fin-form .cal { margin-top: 8px; }
+.fin-msg { min-height: 1em; }
+.fin-summary { border: 1px solid var(--orange); }
+.fin-sum-row { display: flex; justify-content: space-between; padding: 6px 0; }
+.fin-sum-row span { color: var(--hint); }
+.fin-sum-row.big { border-top: 1px solid var(--line); margin-top: 4px; padding-top: 10px; font-size: 24px; }
+.fin-sum-row.big span { color: var(--text); font-weight: 700; font-size: 18px; align-self: center; }
+.fin-sum-row.big b { font-weight: 800; }

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 import { createHmac } from 'node:crypto';
-import { buildView, googleCalendarUrl, buildEvents, parseDate } from '../src/logic.js';
+import { buildView, googleCalendarUrl, buildEvents, parseDate, parseMoney } from '../src/logic.js';
 
 const data = {
   'Люди': [
@@ -15,12 +15,12 @@ const data = {
     { Telegram: '', 'Telegram ID': '123456', 'Имя': 'Без ника', 'Пилот': 'Да', 'Активен': '' },
   ],
   'События': [
-    { ID: 'R1', 'Тип': 'Гонка', 'Формат': 'Командная', 'Чемпионат': 'Кубок Москвы', 'Этап': '3', 'Название': 'Этап 3', 'Дата': '15.11.2026', 'Начало': '10:00', 'Окончание': '18:00', 'Трасса': 'Картодром', 'Состав': 'M-ELVN Orange', 'Менеджер': 'oleg_manager', 'Пилоты': 'ivan_petrov, 555' },
+    { ID: 'R1', 'Тип': 'Гонка', 'Формат': 'Командная', 'Чемпионат': 'Кубок Москвы', 'Этап': '3', 'Название': 'Этап 3', 'Дата': '15.11.2026', 'Начало': '10:00', 'Окончание': '18:00', 'Трасса': 'Картодром', 'Стоимость': '10 000 ₽', 'Состав': 'M-ELVN Orange', 'Менеджер': 'oleg_manager', 'Пилоты': 'ivan_petrov, 555' },
     { ID: 'R1', 'Состав': 'M-ELVN Carbon', 'Менеджер': 'melvn_boss', 'Пилоты': 'kirill' },
     { ID: 'R3', 'Тип': 'Гонка', 'Формат': 'Командная', 'Название': 'Только второй состав', 'Дата': '06.12.2026', 'Состав': 'A', 'Пилоты': 'someone' },
     { ID: 'R3', 'Состав': 'B', 'Менеджер': 'oleg_manager', 'Пилоты': 'kirill' },
-    { ID: 'R2', 'Тип': 'Гонка', 'Формат': 'Личная', 'Чемпионат': 'RMC', 'Этап': 'Финал', 'Название': '', 'Дата': '22.11.2026', 'Начало': '11:00', 'Менеджер': '', 'Пилоты': 'max_kart; oleg_manager' },
-    { ID: 'T1', 'Тип': 'Тренировка', 'Название': 'Тренировка', 'Дата': '08.11.2026', 'Статус': 'Отменено', 'Пилоты': 'anna_smirnova, 123456' },
+    { ID: 'R2', 'Тип': 'Гонка', 'Формат': 'Личная', 'Чемпионат': 'RMC', 'Этап': 'Финал', 'Название': '', 'Дата': '22.11.2026', 'Начало': '11:00', 'Стоимость': '5000', 'Менеджер': '', 'Пилоты': 'max_kart; oleg_manager' },
+    { ID: 'T1', 'Тип': 'Тренировка', 'Название': 'Тренировка', 'Дата': '08.11.2026', 'Стоимость': '3000', 'Статус': 'Отменено', 'Пилоты': 'anna_smirnova, 123456' },
     { ID: 'X1', 'Тип': 'Гонка', 'Название': 'Чужая гонка', 'Дата': '29.11.2026', 'Пилоты': 'someone_else' },
     { ID: 'BAD', 'Тип': 'Гонка', 'Название': 'Без даты', 'Дата': '' },
   ],
@@ -140,6 +140,39 @@ test('parseDate formats', () => {
   assert.equal(parseDate('завтра'), null);
 });
 
+test('parseMoney understands spaces, dots and commas', () => {
+  assert.equal(parseMoney('7 000 ₽ с пилота'), 7000);
+  assert.equal(parseMoney('10.000'), 10000);
+  assert.equal(parseMoney('1 500,50'), 1500.5);
+  assert.equal(parseMoney('7 000,00 ₽'), 7000);
+  assert.equal(parseMoney('бесплатно'), 0);
+});
+
+test('spent: team race cost is split between the pilots of my crew, solo is full', () => {
+  const ivan = buildView(data, { username: 'ivan_petrov' }).finance;
+  assert.deepEqual(ivan.spent.map((x) => [x.raceId, x.amount]), [['R1', 5000]]);
+  assert.equal(ivan.spent[0].category, 'Кубок Москвы');
+  const oleg = buildView(data, { username: 'oleg_manager' }).finance;
+  assert.deepEqual(oleg.spent.map((x) => [x.raceId, x.amount, x.category]), [['R2', 5000, 'RMC']]);
+  // Одиночный пилот в составе командной гонки платит всё; отменённое не считается.
+  const anna = buildView(data, { id: 555 }).finance;
+  assert.deepEqual(anna.spent.map((x) => [x.raceId, x.amount]), [['R1', 5000]]);
+});
+
+test('earned: only my income rows; managers get the form with their races', () => {
+  const d = { ...data, 'Заработок': [
+    { ID: 'a', 'Менеджер': 'oleg_manager', 'ID гонки': 'R1', 'Сумма': '4 000', 'Комментарий': 'бонус' },
+    { ID: 'b', 'Менеджер': 'melvn_boss', 'ID гонки': 'R1', 'Сумма': '9000' },
+  ] };
+  const oleg = buildView(d, { username: 'oleg_manager' }).finance;
+  assert.deepEqual(oleg.earned.map((x) => [x.id, x.amount, x.category, x.note]), [['a', 4000, 'Кубок Москвы', 'бонус']]);
+  assert.equal(oleg.canEarn, true);
+  assert.deepEqual(oleg.managedRaces.map((r) => r.id), ['R3', 'R1']);
+  const ivan = buildView(d, { username: 'ivan_petrov' }).finance;
+  assert.equal(ivan.canEarn, false);
+  assert.deepEqual(ivan.earned, []);
+});
+
 // Запуск собранного dist/Code.gs в песочнице с заглушками сервисов Google.
 function loadGas(botToken, sheets) {
   const code = readFileSync(new URL('../dist/Code.gs', import.meta.url), 'utf8');
@@ -159,10 +192,22 @@ function loadGas(botToken, sheets) {
     },
     SpreadsheetApp: {
       getActiveSpreadsheet: () => ({
-        getSheetByName: (name) => (sheets[name] ? { getDataRange: () => ({ getDisplayValues: () => sheets[name] }) } : null),
+        getSheetByName: (name) => (sheets[name] ? sheetApi(name) : null),
+        insertSheet: (name) => ((sheets[name] = []), sheetApi(name)),
       }),
     },
+    LockService: { getScriptLock: () => ({ waitLock() {}, releaseLock() {} }) },
   };
+  let uuid = 0;
+  ctx.Utilities.getUuid = () => 'id' + ++uuid;
+  function sheetApi(name) {
+    return {
+      getDataRange: () => ({ getDisplayValues: () => sheets[name].map((r) => r.map(String)) }),
+      appendRow: (row) => sheets[name].push(row),
+      deleteRow: (n) => sheets[name].splice(n - 1, 1),
+      setFrozenRows() {},
+    };
+  }
   vm.createContext(ctx);
   vm.runInContext(code, ctx);
   return (params) => JSON.parse(ctx.doGet({ parameter: params }).text);
@@ -202,4 +247,25 @@ test('Apps Script: forged, wrong-token, stale, missing initData or unset token i
   assert.equal(doGet({ initData: old.toString() }).error, 'not_telegram');
   const noToken = loadGas(null, gasSheets);
   assert.equal(noToken({ initData: signInitData('', { id: 42, username: 'ivan_petrov' }).toString() }).error, 'not_telegram');
+});
+
+test('Apps Script: manager adds and deletes income; others cannot', () => {
+  const sheets = JSON.parse(JSON.stringify(gasSheets));
+  const doGet = loadGas('123:ABC', sheets);
+  const as = (username) => signInitData('123:ABC', { id: 7, username }).toString();
+
+  let v = doGet({ initData: as('oleg_manager'), action: 'addIncome', raceId: 'R1', amount: '4 000', note: 'за этап' });
+  assert.equal(v.access, true);
+  assert.deepEqual(v.finance.earned.map((x) => [x.raceId, x.amount, x.note]), [['R1', 4000, 'за этап']]);
+  assert.equal(sheets['Заработок'][0][0], 'ID');
+
+  // Пилот не может записать доход, менеджер — за чужую гонку.
+  assert.equal(doGet({ initData: as('ivan_petrov'), action: 'addIncome', raceId: 'R1', amount: '100' }).error, 'not_manager');
+  assert.equal(doGet({ initData: as('oleg_manager'), action: 'addIncome', raceId: 'X1', amount: '100' }).error, 'not_manager');
+  assert.equal(doGet({ initData: as('oleg_manager'), action: 'addIncome', raceId: 'R1', amount: 'abc' }).error, 'bad_amount');
+
+  const id = v.finance.earned[0].id;
+  assert.equal(doGet({ initData: as('melvn_boss'), action: 'deleteIncome', id }).error, 'not_found');
+  v = doGet({ initData: as('oleg_manager'), action: 'deleteIncome', id });
+  assert.deepEqual(v.finance.earned, []);
 });

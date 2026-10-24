@@ -191,8 +191,93 @@ export function googleCalendarUrl(event, timezone, nameOf = (h) => '@' + h) {
   return 'https://calendar.google.com/calendar/render?' + query;
 }
 
+// «7 000 ₽ с пилота» → 7000; «10.000» → 10000; «1 500,50» → 1500.5; нет числа → 0.
+export function parseMoney(v) {
+  const s = String(v ?? '').replace(/[\s\u00a0\u202f]/g, '');
+  const m = s.match(/\d+(?:[.,]\d+)*/);
+  if (!m) return 0;
+  let n = m[0];
+  // Точка или запятая перед ровно тремя цифрами — разделитель тысяч.
+  n = n.replace(/[.,](?=\d{3}(?:[.,]|$))/g, '').replace(',', '.');
+  const x = Number(n);
+  return isFinite(x) ? x : 0;
+}
+
+// Категория для диаграммы: все тренировки вместе, гонки — по чемпионату.
+export function financeCategory(e) {
+  if (/трен/i.test(e.type)) return 'Тренировки';
+  return e.championship || 'Без чемпионата';
+}
+
+const isoDate = (d) => `${d.y}-${pad(d.m)}-${pad(d.d)}`;
+
+// Траты пилота: «Стоимость» каждой его (не отменённой) гонки. В командной
+// гонке она делится на число пилотов его состава.
+export function buildSpent(events, person) {
+  const items = [];
+  for (const e of events) {
+    if (e.cancelled) continue;
+    const total = parseMoney(e.cost);
+    if (!total) continue;
+    for (const c of e.crews) {
+      if (!listsPerson(c.pilots, person)) continue;
+      const share = e.format === 'team' && c.pilots.length > 1 ? total / c.pilots.length : total;
+      items.push({
+        raceId: e.id,
+        title: e.title,
+        date: isoDate(e.date),
+        category: financeCategory(e),
+        amount: Math.round(share * 100) / 100,
+        // Полная стоимость и число пилотов — чтобы показать «12 000 ₽ ÷ 2».
+        fullCost: share !== total ? total : 0,
+        split: share !== total ? c.pilots.length : 0,
+        note: '',
+      });
+      break;
+    }
+  }
+  return items;
+}
+
+// Доход менеджера: его записи с листа «Заработок».
+export function buildEarned(events, person, incomeRows) {
+  const byId = new Map(events.map((e) => [e.id, e]));
+  const items = [];
+  for (const r of incomeRows || []) {
+    const who = normHandle(r['Менеджер']);
+    if (!who || !person.keys.includes(who)) continue;
+    const amount = parseMoney(r['Сумма']);
+    if (!amount) continue;
+    const e = byId.get(String(r['ID гонки'] || '').trim());
+    items.push({
+      id: String(r['ID'] || '').trim(),
+      raceId: e ? e.id : String(r['ID гонки'] || '').trim(),
+      title: e ? e.title : String(r['ID гонки'] || '').trim() || 'Без гонки',
+      date: e ? isoDate(e.date) : String(r['Дата записи'] || '').slice(0, 10),
+      category: e ? financeCategory(e) : 'Без чемпионата',
+      amount,
+      note: String(r['Комментарий'] || '').trim(),
+    });
+  }
+  return items;
+}
+
+// Гонки, за которые менеджер может внести доход.
+export function managedRaces(events, person) {
+  return events
+    .filter((e) => e.crews.some((c) => listsPerson(c.managers, person)))
+    .map((e) => ({ id: e.id, title: e.title, date: isoDate(e.date) }))
+    .sort((a, b) => b.date.localeCompare(a.date));
+}
+
+export function canAddIncome(events, person, raceId) {
+  const e = events.find((x) => x.id === raceId);
+  return !!e && e.crews.some((c) => listsPerson(c.managers, person));
+}
+
 // Сборка ответа для экрана приложения.
 export function buildView(data, tgUser, timezone) {
+  const allEvents = buildEvents(data['События']);
   const people = buildPeople(data['Люди']);
   const person = findPerson(people, tgUser);
   if (!person || !person.active) {
@@ -211,7 +296,7 @@ export function buildView(data, tgUser, timezone) {
     return { handle: p ? p.handle : /^\d+$/.test(k) ? '' : k, name: nameOf(k), phone: p?.phone || '', me: p === person };
   };
 
-  const events = visibleEvents(buildEvents(data['События']), person)
+  const events = visibleEvents(allEvents, person)
     .map((e) => ({
       id: e.id,
       type: e.type,
@@ -243,10 +328,18 @@ export function buildView(data, tgUser, timezone) {
     }))
     .sort((a, b) => (a.date + a.start).localeCompare(b.date + b.start));
 
+  const races = managedRaces(allEvents, person);
   return {
     access: true,
     me: { name: person.name, roles: person.roles },
     events,
+    finance: {
+      spent: buildSpent(allEvents, person),
+      earned: buildEarned(allEvents, person, data['Заработок']),
+      // Блок «Заработано» — для менеджеров и тех, кого вписали менеджером гонки.
+      canEarn: person.roles.manager || races.length > 0,
+      managedRaces: races,
+    },
     updatedAt: data.updatedAt || null,
   };
 }

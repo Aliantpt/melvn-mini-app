@@ -8,6 +8,8 @@
   let mainView = 'list'; // «Список гонок» или «Календарь»
   let calCursor = null; // показываемый месяц {y, m}; null — текущий
   let calSelected = null; // выбранный день 'YYYY-MM-DD'
+  let finCursor = null; // месяц во вкладке «Финансы»
+  let finAll = false; // «Всё время» вместо месяца
   // Выбранные чемпионаты; пустой список — показывать все.
   let champFilter = [];
   const NO_CHAMP = '__none__';
@@ -189,6 +191,251 @@
     `;
   }
 
+  // ---- Финансы ----
+  // Категориальная палитра для тёмного фона (проверена на различимость, в т.ч. при дальтонизме).
+  // Цвет закреплён за категорией, а не за местом в рейтинге; после 7-й — серый.
+  const FIN_COLORS = ['#d95926', '#3987e5', '#199e70', '#c98500', '#d55181', '#008300', '#9085e9'];
+  const FIN_OTHER = '#77777d';
+  const MONTHS_PREP = ['январю', 'февралю', 'марту', 'апрелю', 'маю', 'июню', 'июлю', 'августу', 'сентябрю', 'октябрю', 'ноябрю', 'декабрю'];
+  const money = (n) => Math.round(n).toLocaleString('ru-RU') + ' ₽';
+  const pct = (part, total) => (total ? Math.round((part / total) * 100) : 0);
+
+  function categoryColors() {
+    const f = view.finance;
+    const cats = [...new Set([...f.spent, ...f.earned].map((x) => x.category))].sort((a, b) => {
+      const rank = (c) => (c === 'Тренировки' ? 1 : c === 'Без чемпионата' ? 2 : 0);
+      return rank(a) - rank(b) || a.localeCompare(b, 'ru');
+    });
+    const map = {};
+    cats.forEach((c, i) => (map[c] = FIN_COLORS[i] || FIN_OTHER));
+    return map;
+  }
+
+  const monthKey = (y, m) => `${y}-${String(m + 1).padStart(2, '0')}`;
+  const inPeriod = (items, key) => (key ? items.filter((x) => x.date.startsWith(key)) : items);
+  const sum = (items) => items.reduce((a, x) => a + x.amount, 0);
+
+  function donut(groups, total, colors, id) {
+    const R = 64;
+    const C = 2 * Math.PI * R;
+    const gap = groups.length > 1 ? 3 : 0;
+    let offset = 0;
+    const arcs = groups
+      .map((g) => {
+        const len = (g.amount / total) * C;
+        const dash = Math.max(len - gap, 0.5);
+        const arc = `<circle class="arc" data-arc="${esc(g.category)}" r="${R}" cx="80" cy="80" fill="none"
+          stroke="${colors[g.category]}" stroke-width="22" stroke-dasharray="${dash} ${C - dash}"
+          stroke-dashoffset="${-offset}" transform="rotate(-90 80 80)"><title>${esc(g.category)}: ${money(g.amount)} (${pct(g.amount, total)}%)</title></circle>`;
+        offset += len;
+        return arc;
+      })
+      .join('');
+    return `<div class="donut" id="${id}">
+      <svg viewBox="0 0 160 160" role="img" aria-label="Диаграмма по категориям">${arcs}</svg>
+      <div class="donut-center"><div class="donut-label">Всего</div><div class="donut-value">${money(total)}</div></div>
+    </div>`;
+  }
+
+  function finBlock(kind, items, prevItems, colors, prevMonthName) {
+    const title = kind === 'spent' ? 'Потрачено' : 'Заработано';
+    const total = sum(items);
+    const groupsMap = {};
+    for (const x of items) groupsMap[x.category] = (groupsMap[x.category] || 0) + x.amount;
+    const groups = Object.entries(groupsMap)
+      .map(([category, amount]) => ({ category, amount }))
+      .sort((a, b) => b.amount - a.amount);
+
+    let compare = '';
+    if (prevItems) {
+      const prev = sum(prevItems);
+      if (prev && total) {
+        const d = Math.round(((total - prev) / prev) * 100);
+        compare = `<div class="fin-compare">${d > 0 ? '▲ +' : d < 0 ? '▼ ' : ''}${d}% к ${prevMonthName} <span class="small">(${money(prev)})</span></div>`;
+      } else if (prev && !total) {
+        compare = `<div class="fin-compare">В ${prevMonthName.replace(/у$/, 'е').replace(/ю$/, 'е')} было ${money(prev)}</div>`;
+      } else if (!prev && total) {
+        compare = `<div class="fin-compare">В прошлом месяце ничего не было</div>`;
+      }
+    }
+
+    const legend = groups
+      .map(
+        (g) => `<div class="fin-row" data-cat="${esc(g.category)}">
+          <span class="swatch" style="background:${colors[g.category]}"></span>
+          <span class="fin-name">${esc(g.category)}</span>
+          <span class="fin-pct">${pct(g.amount, total)}%</span>
+          <span class="fin-amt">${money(g.amount)}</span>
+        </div>`,
+      )
+      .join('');
+
+    const rows = items
+      .slice()
+      .sort((a, b) => b.date.localeCompare(a.date))
+      .map(
+        (x) => `<div class="fin-item">
+          <span class="swatch small-sw" style="background:${colors[x.category]}"></span>
+          <div class="fin-item-main">
+            <div>${esc(x.title)}</div>
+            <div class="small">${esc(fmtDate(x.date))}${x.split ? ` · ${money(x.fullCost)} ÷ ${x.split} пил.` : ''}${x.note ? ' · ' + esc(x.note) : ''}</div>
+          </div>
+          <span class="fin-amt">${money(x.amount)}</span>
+          ${kind === 'earned' && x.id ? `<button class="fin-del" data-del="${esc(x.id)}" aria-label="Удалить">×</button>` : ''}
+        </div>`,
+      )
+      .join('');
+
+    const empty = kind === 'spent' ? 'Трат за этот период нет.' : 'Доходов за этот период нет.';
+    return `<div class="section fin-block">
+      <h3>${title}</h3>
+      <div class="fin-total">${money(total)}</div>
+      ${compare}
+      ${groups.length ? donut(groups, total, colors, 'donut-' + kind) + `<div class="fin-legend">${legend}</div>` : `<div class="small" style="padding:8px 0">${empty}</div>`}
+      ${rows ? `<h3 style="margin-top:14px">По гонкам</h3>${rows}` : ''}
+    </div>`;
+  }
+
+  function incomeForm() {
+    const races = view.finance.managedRaces;
+    if (!races.length) return '<div class="section small">Чтобы внести доход, админ должен вписать вас менеджером гонки.</div>';
+    return `<form class="section fin-form" id="income-form">
+      <h3>Внести заработок</h3>
+      <label class="small">Гонка</label>
+      <select name="raceId" required>
+        ${races.map((r) => `<option value="${esc(r.id)}">${esc(fmtDate(r.date))} — ${esc(r.title)}</option>`).join('')}
+      </select>
+      <label class="small">Сумма, ₽</label>
+      <input name="amount" inputmode="decimal" placeholder="Например, 5000" required>
+      <label class="small">Комментарий (необязательно)</label>
+      <input name="note" maxlength="200" placeholder="За что">
+      <button class="cal" type="submit">Сохранить</button>
+      <div class="small fin-msg" id="income-msg"></div>
+    </form>`;
+  }
+
+  function financeBody() {
+    const f = view.finance;
+    if (!f) return '<div class="state">Обновите скрипт в таблице, чтобы увидеть финансы.</div>';
+    const t = today();
+    if (!finCursor) {
+      const [ty, tm] = t.split('-').map(Number);
+      finCursor = { y: ty, m: tm - 1 };
+    }
+    const colors = categoryColors();
+    const key = finAll ? null : monthKey(finCursor.y, finCursor.m);
+    const prevD = new Date(finCursor.y, finCursor.m - 1, 1);
+    const prevKey = finAll ? null : monthKey(prevD.getFullYear(), prevD.getMonth());
+    const prevName = MONTHS_PREP[prevD.getMonth()];
+
+    const spent = inPeriod(f.spent, key);
+    const earned = inPeriod(f.earned, key);
+    const spentBlock = finBlock('spent', spent, prevKey ? inPeriod(f.spent, prevKey) : null, colors, prevName);
+    const earnedBlock = f.canEarn ? finBlock('earned', earned, prevKey ? inPeriod(f.earned, prevKey) : null, colors, prevName) + incomeForm() : '';
+
+    const totalSpent = sum(spent);
+    const totalEarned = sum(earned);
+    const summary = `<div class="section fin-summary">
+      <h3>Итог ${finAll ? 'за всё время' : 'за месяц'}</h3>
+      <div class="fin-sum-row"><span>Потрачено</span><b>${money(totalSpent)}</b></div>
+      ${f.canEarn ? `<div class="fin-sum-row"><span>Заработано</span><b>${money(totalEarned)}</b></div>
+      <div class="fin-sum-row big"><span>Баланс</span><b>${totalEarned - totalSpent >= 0 ? '' : '−'}${money(Math.abs(totalEarned - totalSpent))}</b></div>`
+        : `<div class="fin-sum-row big"><span>Итого</span><b>${money(totalSpent)}</b></div>`}
+    </div>`;
+
+    return `
+      <div class="fin-period">
+        ${finAll ? '' : '<button class="cal-nav" data-fin-shift="-1" aria-label="Предыдущий месяц">‹</button>'}
+        <div class="cal-title">${finAll ? 'Всё время' : `${MONTHS_NOM[finCursor.m]} ${finCursor.y}`}</div>
+        ${finAll ? '' : '<button class="cal-nav" data-fin-shift="1" aria-label="Следующий месяц">›</button>'}
+        <button class="chip ${finAll ? 'on' : ''}" data-fin-all>Всё время</button>
+      </div>
+      ${spentBlock}
+      ${earnedBlock}
+      ${summary}
+      <div class="small" style="text-align:center;margin-top:6px">Траты — из «Стоимости» ваших гонок; в командной гонке делятся на пилотов состава.</div>
+    `;
+  }
+
+  // Подсветка категории: тап по строке легенды или по дуге.
+  function bindFinance() {
+    app.querySelectorAll('.fin-block').forEach((block) => {
+      const center = block.querySelector('.donut-center');
+      const select = (cat) => {
+        const same = block.dataset.sel === cat;
+        block.dataset.sel = same ? '' : cat;
+        block.querySelectorAll('[data-arc]').forEach((a) => a.classList.toggle('dim', !same && a.dataset.arc !== cat));
+        block.querySelectorAll('[data-cat]').forEach((r) => r.classList.toggle('on', !same && r.dataset.cat === cat));
+        const row = block.querySelector(`[data-cat="${CSS.escape(cat)}"]`);
+        if (center && row) {
+          center.innerHTML = same
+            ? center.dataset.orig
+            : `<div class="donut-label">${esc(cat)}</div><div class="donut-value">${row.querySelector('.fin-amt').textContent}</div><div class="donut-label">${row.querySelector('.fin-pct').textContent}</div>`;
+        }
+      };
+      if (center) center.dataset.orig = center.innerHTML;
+      block.querySelectorAll('[data-arc]').forEach((a) => a.addEventListener('click', () => select(a.dataset.arc)));
+      block.querySelectorAll('[data-cat]').forEach((r) => r.addEventListener('click', () => select(r.dataset.cat)));
+    });
+    app.querySelectorAll('[data-fin-shift]').forEach((b) =>
+      b.addEventListener('click', () => {
+        const d = new Date(finCursor.y, finCursor.m + Number(b.dataset.finShift), 1);
+        finCursor = { y: d.getFullYear(), m: d.getMonth() };
+        renderList();
+      }),
+    );
+    const all = app.querySelector('[data-fin-all]');
+    if (all)
+      all.addEventListener('click', () => {
+        finAll = !finAll;
+        renderList();
+      });
+    const form = document.getElementById('income-form');
+    if (form)
+      form.addEventListener('submit', async (ev) => {
+        ev.preventDefault();
+        const fd = new FormData(form);
+        const msg = document.getElementById('income-msg');
+        msg.textContent = 'Сохраняю…';
+        const res = await api({ action: 'addIncome', raceId: fd.get('raceId'), amount: fd.get('amount'), note: fd.get('note') });
+        if (res && res.access) {
+          view = res;
+          renderList();
+        } else {
+          msg.textContent = INCOME_ERRORS[res && res.error] || 'Не удалось сохранить, попробуйте ещё раз.';
+        }
+      });
+    app.querySelectorAll('[data-del]').forEach((b) =>
+      b.addEventListener('click', async () => {
+        const ok = await confirmBox('Удалить эту запись о заработке?');
+        if (!ok) return;
+        const res = await api({ action: 'deleteIncome', id: b.dataset.del });
+        if (res && res.access) {
+          view = res;
+          renderList();
+        }
+      }),
+    );
+  }
+
+  const INCOME_ERRORS = {
+    bad_amount: 'Введите сумму числом, например 5000.',
+    not_manager: 'Вы не указаны менеджером этой гонки.',
+    no_access: 'Нет доступа.',
+  };
+
+  function confirmBox(text) {
+    return new Promise((resolve) => {
+      if (tg && tg.showConfirm) {
+        try {
+          tg.showConfirm(text, resolve);
+          return;
+        } catch (e) {}
+      }
+      resolve(window.confirm(text));
+    });
+  }
+
   function renderList() {
     if (tg) tg.BackButton.hide();
 
@@ -216,9 +463,9 @@
       <div class="nav">
         <button class="nav-btn ${mainView === 'list' ? 'on' : ''}" data-view="list">Список гонок</button>
         <button class="nav-btn ${mainView === 'calendar' ? 'on' : ''}" data-view="calendar">Календарь</button>
+        <button class="nav-btn ${mainView === 'finance' ? 'on' : ''}" data-view="finance">Финансы</button>
       </div>
-      ${chips}
-      ${mainView === 'calendar' ? calendarBody(shown) : listBody(shown)}
+      ${mainView === 'finance' ? financeBody() : chips + (mainView === 'calendar' ? calendarBody(shown) : listBody(shown))}
     `;
     app.querySelectorAll('[data-view]').forEach((b) =>
       b.addEventListener('click', () => {
@@ -264,6 +511,7 @@
     app.querySelectorAll('[data-id]').forEach((b) =>
       b.addEventListener('click', () => renderEvent(b.dataset.id)),
     );
+    if (mainView === 'finance') bindFinance();
   }
 
   const FORMAT = { team: 'Командная', solo: 'Личная' };
@@ -344,15 +592,25 @@
     window.scrollTo(0, 0);
   }
 
+  // Запрос к скрипту таблицы. Простой GET без своих заголовков — так Apps Script отвечает без проблем с CORS.
+  async function api(params) {
+    const q = new URLSearchParams({ initData: tg ? tg.initData : '', ...(params || {}) });
+    try {
+      const res = await fetch(window.MELVN_API_URL + '?' + q.toString());
+      return await res.json();
+    } catch (e) {
+      return null;
+    }
+  }
+
   async function load() {
     const initData = tg ? tg.initData : '';
     if (!initData) {
       return state('Откройте через Telegram', 'Это приложение работает только внутри бота команды M-ELVN.');
     }
     try {
-      // Простой GET без своих заголовков: так Apps Script отвечает без проблем с CORS.
-      const res = await fetch(window.MELVN_API_URL + '?initData=' + encodeURIComponent(initData));
-      const body = await res.json();
+      const body = await api();
+      if (!body) throw new Error('network');
       if (body.error === 'not_telegram') {
         return state('Не удалось проверить вход', 'Закройте приложение и откройте его снова из бота.');
       }

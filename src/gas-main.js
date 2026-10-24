@@ -1,5 +1,7 @@
 // Точка входа Google Apps Script. Собирается вместе с logic.js в dist/Code.gs.
 // Приложение вызывает: GET <URL веб-приложения>?initData=<Telegram.WebApp.initData>
+// Запись дохода менеджером: те же параметры + action=addIncome&raceId=&amount=&note=
+// Удаление своей записи: action=deleteIncome&id=
 
 // Токен бота хранится в свойствах скрипта (Настройки проекта → Свойства скрипта → BOT_TOKEN),
 // чтобы при обновлении кода его не нужно было вписывать заново.
@@ -8,7 +10,9 @@ function botToken() {
 }
 
 const TIMEZONE = 'Europe/Moscow';
-const SHEETS = ['Люди', 'События'];
+const SHEETS = ['Люди', 'События', 'Заработок'];
+const INCOME_SHEET = 'Заработок';
+const INCOME_HEADERS = ['ID', 'Дата записи', 'Менеджер', 'ID гонки', 'Сумма', 'Комментарий'];
 const MAX_AUTH_AGE_SECONDS = 7 * 24 * 3600;
 
 function doGet(e) {
@@ -16,6 +20,11 @@ function doGet(e) {
   const user = verifyInitData(initData, botToken());
   if (!user) return jsonOut({ error: 'not_telegram' });
   try {
+    const action = e.parameter.action || '';
+    if (action === 'addIncome' || action === 'deleteIncome') {
+      const result = changeIncome(action, e.parameter, user);
+      if (result) return jsonOut(result);
+    }
     return jsonOut(buildView(readSheets(), user, TIMEZONE));
   } catch (err) {
     return jsonOut({ error: 'sheet_unavailable', message: String((err && err.message) || err) });
@@ -40,6 +49,54 @@ function readSheets() {
       });
   });
   return out;
+}
+
+// Запись или удаление дохода. Возвращает объект с ошибкой или null при успехе.
+function changeIncome(action, p, user) {
+  const lock = LockService.getScriptLock();
+  lock.waitLock(10000);
+  try {
+    const data = readSheets();
+    const person = findPerson(buildPeople(data['Люди']), user);
+    if (!person || !person.active) return { error: 'no_access' };
+    const sh = incomeSheet();
+
+    if (action === 'addIncome') {
+      const raceId = String(p.raceId || '').trim();
+      const amount = parseMoney(p.amount);
+      if (!amount || amount < 0) return { error: 'bad_amount' };
+      if (!canAddIncome(buildEvents(data['События']), person, raceId)) return { error: 'not_manager' };
+      const note = String(p.note || '').slice(0, 200);
+      sh.appendRow([Utilities.getUuid(), new Date().toISOString(), person.key, raceId, amount, note]);
+      return null;
+    }
+
+    // deleteIncome: удалить можно только свою запись.
+    const id = String(p.id || '').trim();
+    const values = sh.getDataRange().getDisplayValues();
+    for (let i = values.length - 1; i >= 2; i--) {
+      if (values[i][0] === id && person.keys.includes(normHandle(values[i][2]))) {
+        sh.deleteRow(i + 1);
+        return null;
+      }
+    }
+    return { error: 'not_found' };
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+// Лист «Заработок» создаётся сам при первой записи.
+function incomeSheet() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let sh = ss.getSheetByName(INCOME_SHEET);
+  if (!sh) {
+    sh = ss.insertSheet(INCOME_SHEET);
+    sh.appendRow(INCOME_HEADERS);
+    sh.appendRow(['Заполняется из приложения', 'Не редактировать вручную без нужды', 'Ник или ID', 'ID из «Событий»', 'Рубли', '']);
+    sh.setFrozenRows(2);
+  }
+  return sh;
 }
 
 // Проверка подписи initData:
