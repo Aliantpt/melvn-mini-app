@@ -3,10 +3,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "node --test test/*.test.js",
-    "deploy": "wrangler deploy"
-  },
-  "devDependencies": {
-    "wrangler": "^4.0.0"
+    "test": "node scripts/build-gas.mjs && node --test test/*.test.js",
+    "build:gas": "node scripts/build-gas.mjs"
   }
 }

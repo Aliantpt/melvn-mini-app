@@ -150,7 +150,8 @@
       return state('Откройте через Telegram', 'Это приложение работает только внутри бота команды M-ELVN.');
     }
     try {
-      const res = await fetch('/api/me', { headers: { 'x-telegram-init-data': initData } });
+      // Простой GET без своих заголовков: так Apps Script отвечает без проблем с CORS.
+      const res = await fetch(window.MELVN_API_URL + '?initData=' + encodeURIComponent(initData));
       const body = await res.json();
       if (body.error === 'not_telegram') {
         return state('Не удалось проверить вход', 'Закройте приложение и откройте его снова из бота.');

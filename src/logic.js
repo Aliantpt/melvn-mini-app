@@ -1,5 +1,5 @@
 // Чистая логика: разбор данных таблицы, роли, видимость, ссылки на календарь.
-// Не зависит от Cloudflare, поэтому покрыта тестами в test/logic.test.js.
+// Работает и в Node (тесты), и в Google Apps Script (scripts/build-gas.mjs убирает `export`).
 
 const YES = new Set(['да', 'yes', 'true', '1', '+', 'x', 'х']);
 
@@ -152,15 +152,19 @@ export function googleCalendarUrl(event, timezone, nameOf = (h) => '@' + h) {
   } else {
     dates = `${stamp(event.date)}/${stamp(nextDay(event.date))}`;
   }
-  const params = new URLSearchParams({
+  // Без URLSearchParams: в Google Apps Script его нет.
+  const params = {
     action: 'TEMPLATE',
     text: `${event.title} (M-ELVN)`,
     dates,
     details: calendarDetails(event, nameOf),
     location: [event.track, event.address].filter(Boolean).join(', '),
-  });
-  if (event.start && timezone) params.set('ctz', timezone);
-  return 'https://calendar.google.com/calendar/render?' + params.toString();
+  };
+  if (event.start && timezone) params.ctz = timezone;
+  const query = Object.keys(params)
+    .map((k) => `${k}=${encodeURIComponent(params[k])}`)
+    .join('&');
+  return 'https://calendar.google.com/calendar/render?' + query;
 }
 
 // Сборка ответа для экрана приложения.

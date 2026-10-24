@@ -1,7 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { buildView, googleCalendarUrl, buildEvents, parseDate } from '../src/logic.js';
-import { verifyInitData } from '../src/telegram.js';
+import { readFileSync } from 'node:fs';
+import vm from 'node:vm';
+import { createHmac } from 'node:crypto';
 
 const data = {
   'Люди': [
@@ -87,17 +89,61 @@ test('parseDate formats', () => {
   assert.equal(parseDate('завтра'), null);
 });
 
-test('initData signature is verified', async () => {
-  const { createHmac } = await import('node:crypto');
-  const botToken = '123:ABC';
-  const user = JSON.stringify({ id: 42, username: 'ivan_petrov' });
-  const params = new URLSearchParams({ auth_date: String(Math.floor(Date.now() / 1000)), query_id: 'q', user });
+// Запуск собранного dist/Code.gs в песочнице с заглушками сервисов Google.
+function loadGas(botToken, sheets) {
+  const code = readFileSync(new URL('../dist/Code.gs', import.meta.url), 'utf8').replace('ВСТАВЬТЕ_ТОКЕН_БОТА', botToken);
+  const signed = (buf) => [...buf].map((b) => (b > 127 ? b - 256 : b));
+  const ctx = {
+    Utilities: {
+      newBlob: (s) => ({ getBytes: () => signed(Buffer.from(s, 'utf8')) }),
+      computeHmacSha256Signature: (value, key) =>
+        signed(createHmac('sha256', Buffer.from(key.map((b) => (b + 256) % 256))).update(Buffer.from(value.map((b) => (b + 256) % 256))).digest()),
+    },
+    ContentService: {
+      MimeType: { JSON: 'json' },
+      createTextOutput: (text) => ({ text, setMimeType() { return this; } }),
+    },
+    SpreadsheetApp: {
+      getActiveSpreadsheet: () => ({
+        getSheetByName: (name) => (sheets[name] ? { getDataRange: () => ({ getDisplayValues: () => sheets[name] }) } : null),
+      }),
+    },
+  };
+  vm.createContext(ctx);
+  vm.runInContext(code, ctx);
+  return (params) => JSON.parse(ctx.doGet({ parameter: params }).text);
+}
+
+function signInitData(botToken, user, authDate = Math.floor(Date.now() / 1000)) {
+  const params = new URLSearchParams({ auth_date: String(authDate), query_id: 'q', user: JSON.stringify(user) });
   const check = [...params.entries()].map(([k, v]) => `${k}=${v}`).sort().join('\n');
   const secret = createHmac('sha256', 'WebAppData').update(botToken).digest();
   params.set('hash', createHmac('sha256', secret).update(check).digest('hex'));
-  const good = await verifyInitData(params.toString(), botToken);
-  assert.equal(good.username, 'ivan_petrov');
-  assert.equal(await verifyInitData(params.toString(), '123:WRONG'), null);
-  params.set('user', JSON.stringify({ id: 1, username: 'hacker' }));
-  assert.equal(await verifyInitData(params.toString(), botToken), null);
+  return params;
+}
+
+const sheetTable = (rows) => {
+  const headers = Object.keys(Object.assign({}, ...rows));
+  return [headers, headers.map(() => 'подсказка'), ...rows.map((r) => headers.map((h) => r[h] ?? '')), headers.map(() => '')];
+};
+const gasSheets = { 'Люди': sheetTable(data['Люди']), 'События': sheetTable(data['События']), 'Составы': sheetTable(data['Составы']) };
+
+test('Apps Script: valid initData returns the pilot view', () => {
+  const doGet = loadGas('123:ABC', gasSheets);
+  const initData = signInitData('123:ABC', { id: 42, username: 'ivan_petrov', first_name: 'Иван' }).toString();
+  const v = doGet({ initData });
+  assert.equal(v.access, true);
+  assert.deepEqual(v.events.map((e) => e.id), ['R1']);
+  assert.match(v.events[0].calendarUrl, /^https:\/\/calendar\.google\.com\/calendar\/render\?action=TEMPLATE/);
+});
+
+test('Apps Script: forged, wrong-token, stale or missing initData is rejected', () => {
+  const doGet = loadGas('123:ABC', gasSheets);
+  assert.equal(doGet({}).error, 'not_telegram');
+  assert.equal(doGet({ initData: signInitData('123:WRONG', { id: 1, username: 'melvn_boss' }).toString() }).error, 'not_telegram');
+  const forged = signInitData('123:ABC', { id: 42, username: 'ivan_petrov' });
+  forged.set('user', JSON.stringify({ id: 1, username: 'melvn_boss' }));
+  assert.equal(doGet({ initData: forged.toString() }).error, 'not_telegram');
+  const old = signInitData('123:ABC', { id: 42, username: 'ivan_petrov' }, 1000);
+  assert.equal(doGet({ initData: old.toString() }).error, 'not_telegram');
 });
