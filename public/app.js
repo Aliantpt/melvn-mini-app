@@ -5,6 +5,9 @@
   const who = document.getElementById('who');
   let view = null;
   let tab = 'upcoming';
+  let mainView = 'list'; // «Список гонок» или «Календарь»
+  let calCursor = null; // показываемый месяц {y, m}; null — текущий
+  let calSelected = null; // выбранный день 'YYYY-MM-DD'
   // Выбранные чемпионаты; пустой список — показывать все.
   let champFilter = [];
   const NO_CHAMP = '__none__';
@@ -96,9 +99,98 @@
     return [e.championship, e.stage].filter(Boolean).join(' · ');
   }
 
+  const MONTHS_NOM = ['Январь', 'Февраль', 'Март', 'Апрель', 'Май', 'Июнь', 'Июль', 'Август', 'Сентябрь', 'Октябрь', 'Ноябрь', 'Декабрь'];
+  const WEEKDAYS = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'];
+  const isoOf = (y, m, d) => `${y}-${String(m + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+
+  function cardHtml(e) {
+    const meta = [fmtDate(e.date), fmtTime(e), e.track].filter(Boolean).map(esc).join(' · ');
+    const champ = champLabel(e);
+    const champLine = champ ? `<div class="champ">${esc(champ)}</div>` : '';
+    return `<button class="card ${e.cancelled ? 'cancelled' : ''}" data-id="${esc(e.id)}">
+      ${champLine}
+      <div class="title">${esc(e.title)}</div>
+      <div class="meta">${meta}</div>
+      ${badges(e)}
+    </button>`;
+  }
+
+  function listBody(shown) {
+    const t = today();
+    const upcoming = shown.filter((e) => e.date >= t);
+    const past = shown.filter((e) => e.date < t).reverse();
+    const list = tab === 'upcoming' ? upcoming : past;
+    return `
+      <div class="tabs">
+        <button class="tab ${tab === 'upcoming' ? 'on' : ''}" data-tab="upcoming">Предстоящие (${upcoming.length})</button>
+        <button class="tab ${tab === 'past' ? 'on' : ''}" data-tab="past">Прошедшие (${past.length})</button>
+      </div>
+      ${list.map(cardHtml).join('') || `<div class="state">${tab === 'upcoming' ? 'Пока нет запланированных событий.' : 'Прошедших событий нет.'}</div>`}
+    `;
+  }
+
+  // Месяц сеткой: недели с понедельника, дни с гонками оранжевые, сегодня обведён.
+  function calendarBody(shown) {
+    const t = today();
+    if (!calCursor) {
+      const [ty, tm] = t.split('-').map(Number);
+      calCursor = { y: ty, m: tm - 1 };
+    }
+    const { y, m } = calCursor;
+    const byDate = {};
+    for (const e of shown) (byDate[e.date] = byDate[e.date] || []).push(e);
+
+    const offset = (new Date(y, m, 1).getDay() + 6) % 7;
+    const days = new Date(y, m + 1, 0).getDate();
+    let cells = '<span class="cal-cell empty"></span>'.repeat(offset);
+    for (let d = 1; d <= days; d++) {
+      const iso = isoOf(y, m, d);
+      const evs = byDate[iso] || [];
+      const live = evs.some((e) => !e.cancelled);
+      const cls = [
+        'cal-cell',
+        live ? 'has' : evs.length ? 'has-off' : '',
+        iso === t ? 'today' : '',
+        iso === calSelected ? 'sel' : '',
+      ].join(' ');
+      const dots = evs.length > 1 ? `<span class="cal-count">${evs.length}</span>` : '';
+      cells += `<button class="${cls}" data-day="${iso}">${d}${dots}</button>`;
+    }
+
+    const monthPrefix = isoOf(y, m, 1).slice(0, 7);
+    let below;
+    if (calSelected && calSelected.startsWith(monthPrefix)) {
+      const evs = byDate[calSelected] || [];
+      below = `<div class="cal-caption">${esc(fmtDate(calSelected))}</div>
+        ${evs.map(cardHtml).join('') || '<div class="state">В этот день гонок нет.</div>'}`;
+    } else {
+      const evs = shown.filter((e) => e.date.startsWith(monthPrefix));
+      below = `<div class="cal-caption">${evs.length ? 'Гонки в этом месяце' : 'В этом месяце гонок нет'}</div>
+        ${evs.map(cardHtml).join('')}`;
+    }
+
+    const isCurrent = t.startsWith(monthPrefix);
+    return `
+      <div class="section cal-box">
+        <div class="cal-head">
+          <button class="cal-nav" data-shift="-12" aria-label="Предыдущий год">«</button>
+          <button class="cal-nav" data-shift="-1" aria-label="Предыдущий месяц">‹</button>
+          <div class="cal-title">${MONTHS_NOM[m]} ${y}</div>
+          <button class="cal-nav" data-shift="1" aria-label="Следующий месяц">›</button>
+          <button class="cal-nav" data-shift="12" aria-label="Следующий год">»</button>
+        </div>
+        <div class="cal-grid">
+          ${WEEKDAYS.map((w, i) => `<span class="cal-wd ${i > 4 ? 'we' : ''}">${w}</span>`).join('')}
+          ${cells}
+        </div>
+        ${isCurrent ? '' : '<button class="cal-today" data-today>Сегодня</button>'}
+      </div>
+      ${below}
+    `;
+  }
+
   function renderList() {
     if (tg) tg.BackButton.hide();
-    const t = today();
 
     // Чемпионаты из событий человека; выбор, которого больше нет, игнорируется.
     const champs = [...new Set(view.events.map(champKey))].sort((a, b) =>
@@ -106,24 +198,6 @@
     );
     const active = champFilter.filter((c) => champs.includes(c));
     const shown = active.length ? view.events.filter((e) => active.includes(champKey(e))) : view.events;
-
-    const upcoming = shown.filter((e) => e.date >= t);
-    const past = shown.filter((e) => e.date < t).reverse();
-    const list = tab === 'upcoming' ? upcoming : past;
-
-    const items = list
-      .map((e) => {
-        const meta = [fmtDate(e.date), fmtTime(e), e.track].filter(Boolean).map(esc).join(' · ');
-        const champ = champLabel(e);
-        const champLine = champ ? `<div class="champ">${esc(champ)}</div>` : '';
-        return `<button class="card ${e.cancelled ? 'cancelled' : ''}" data-id="${esc(e.id)}">
-          ${champLine}
-          <div class="title">${esc(e.title)}</div>
-          <div class="meta">${meta}</div>
-          ${badges(e)}
-        </button>`;
-      })
-      .join('');
 
     const chips =
       champs.length > 1 || (champs.length === 1 && champs[0] !== NO_CHAMP)
@@ -139,13 +213,19 @@
         : '';
 
     app.innerHTML = `
-      ${chips}
-      <div class="tabs">
-        <button class="tab ${tab === 'upcoming' ? 'on' : ''}" data-tab="upcoming">Предстоящие (${upcoming.length})</button>
-        <button class="tab ${tab === 'past' ? 'on' : ''}" data-tab="past">Прошедшие (${past.length})</button>
+      <div class="nav">
+        <button class="nav-btn ${mainView === 'list' ? 'on' : ''}" data-view="list">Список гонок</button>
+        <button class="nav-btn ${mainView === 'calendar' ? 'on' : ''}" data-view="calendar">Календарь</button>
       </div>
-      ${items || `<div class="state">${tab === 'upcoming' ? 'Пока нет запланированных событий.' : 'Прошедших событий нет.'}</div>`}
+      ${chips}
+      ${mainView === 'calendar' ? calendarBody(shown) : listBody(shown)}
     `;
+    app.querySelectorAll('[data-view]').forEach((b) =>
+      b.addEventListener('click', () => {
+        mainView = b.dataset.view;
+        renderList();
+      }),
+    );
     app.querySelectorAll('[data-tab]').forEach((b) =>
       b.addEventListener('click', () => {
         tab = b.dataset.tab;
@@ -158,6 +238,26 @@
         if (!c) champFilter = [];
         else champFilter = active.includes(c) ? active.filter((x) => x !== c) : [...active, c];
         saveFilter();
+        renderList();
+      }),
+    );
+    app.querySelectorAll('[data-shift]').forEach((b) =>
+      b.addEventListener('click', () => {
+        const d = new Date(calCursor.y, calCursor.m + Number(b.dataset.shift), 1);
+        calCursor = { y: d.getFullYear(), m: d.getMonth() };
+        renderList();
+      }),
+    );
+    const todayBtn = app.querySelector('[data-today]');
+    if (todayBtn)
+      todayBtn.addEventListener('click', () => {
+        calCursor = null;
+        calSelected = today();
+        renderList();
+      });
+    app.querySelectorAll('[data-day]').forEach((b) =>
+      b.addEventListener('click', () => {
+        calSelected = calSelected === b.dataset.day ? null : b.dataset.day;
         renderList();
       }),
     );
