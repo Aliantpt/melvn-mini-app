@@ -6,6 +6,7 @@
 // Приложение вызывает: GET <URL веб-приложения>?initData=<Telegram.WebApp.initData>
 // Запись дохода менеджером: те же параметры + action=addIncome&raceId=&amount=&note=
 // Удаление своей записи: action=deleteIncome&id=
+// Запись на тренировку: action=signTraining&trainingId=&laps=; отказ: action=unsignTraining&trainingId=
 
 // Токен бота хранится в свойствах скрипта (Настройки проекта → Свойства скрипта → BOT_TOKEN),
 // чтобы при обновлении кода его не нужно было вписывать заново.
@@ -14,9 +15,16 @@ function botToken() {
 }
 
 const TIMEZONE = 'Europe/Moscow';
-const SHEETS = ['Люди', 'События', 'Заработок'];
+const SHEETS = ['Люди', 'События', 'Заработок', 'Тренировки', 'Записи на тренировки'];
 const INCOME_SHEET = 'Заработок';
 const INCOME_HEADERS = ['ID', 'Дата записи', 'Менеджер', 'ID гонки', 'Сумма', 'Комментарий'];
+const INCOME_HINTS = ['Заполняется из приложения', 'Не редактировать вручную без нужды', 'Ник или ID', 'ID из «Событий»', 'Рубли', ''];
+const TRAININGS_SHEET = 'Тренировки';
+const TRAININGS_HEADERS = ['ID', 'Чемпионат', 'Название', 'Дата', 'Начало', 'Окончание', 'Трасса', 'Адрес', 'Стоимость заезда', 'Макс. заездов', 'Описание', 'Статус'];
+const TRAININGS_HINTS = ['Т1, Т2…', 'Необязательно', 'Если пусто — «Тренировка»', 'ДД.ММ.ГГГГ', 'ЧЧ:ММ', 'ЧЧ:ММ', '', '', 'Рубли за один заезд', 'Пусто — до 10', '', 'Отменена — скрыть из расходов'];
+const SIGNUP_SHEET = 'Записи на тренировки';
+const SIGNUP_HEADERS = ['ID', 'Дата записи', 'Пилот', 'ID тренировки', 'Заездов'];
+const SIGNUP_HINTS = ['Заполняется из приложения', 'Не редактировать вручную без нужды', 'Ник или ID', 'ID из «Тренировок»', 'Число'];
 // Подпись Telegram действует сутки: перехваченную ссылку нельзя использовать долго.
 const MAX_AUTH_AGE_SECONDS = 24 * 3600;
 const MAX_INCOME = 10000000;
@@ -27,9 +35,15 @@ function doGet(e) {
   const user = verifyInitData(initData, botToken());
   if (!user) return jsonOut({ error: 'not_telegram' });
   try {
+    // Лист «Тренировки» появляется сам при первом открытии приложения после обновления скрипта.
+    ensureSheet(TRAININGS_SHEET, TRAININGS_HEADERS, TRAININGS_HINTS);
     const action = e.parameter.action || '';
     if (action === 'addIncome' || action === 'deleteIncome') {
       const result = changeIncome(action, e.parameter, user);
+      if (result) return jsonOut(result);
+    }
+    if (action === 'signTraining' || action === 'unsignTraining') {
+      const result = changeSignup(action, e.parameter, user);
       if (result) return jsonOut(result);
     }
     return jsonOut(buildView(readSheets(), user, TIMEZONE));
@@ -69,7 +83,7 @@ function changeIncome(action, p, user) {
     const person = findPerson(buildPeople(data['Люди']), user);
     if (!person || !person.active) return { error: 'no_access' };
     if (!allowWrite(person.key)) return { error: 'too_many' };
-    const sh = incomeSheet();
+    const sh = ensureSheet(INCOME_SHEET, INCOME_HEADERS, INCOME_HINTS);
 
     if (action === 'addIncome') {
       const raceId = String(p.raceId || '').trim();
@@ -113,14 +127,45 @@ function allowWrite(key) {
   return true;
 }
 
-// Лист «Заработок» создаётся сам при первой записи.
-function incomeSheet() {
+// Запись на тренировку или отказ. Пилот меняет только свои записи.
+// Возвращает объект с ошибкой или null при успехе.
+function changeSignup(action, p, user) {
+  const lock = LockService.getScriptLock();
+  lock.waitLock(10000);
+  try {
+    const data = readSheets();
+    const person = findPerson(buildPeople(data['Люди']), user);
+    if (!person || !person.active) return { error: 'no_access' };
+    const trainingId = String(p.trainingId || '').trim();
+    if (action === 'signTraining') {
+      const err = canSignTraining(buildTrainings(data[TRAININGS_SHEET]), trainingId, String(p.laps || ''));
+      if (err) return { error: err };
+    }
+    if (!allowWrite(person.key)) return { error: 'too_many' };
+    const sh = ensureSheet(SIGNUP_SHEET, SIGNUP_HEADERS, SIGNUP_HINTS);
+
+    // Прежняя запись на эту тренировку удаляется, новая добавляется в конец.
+    const values = sh.getDataRange().getDisplayValues();
+    for (let i = values.length - 1; i >= 2; i--) {
+      if (String(values[i][3]).trim() === trainingId && person.keys.includes(normHandle(values[i][2]))) sh.deleteRow(i + 1);
+    }
+    if (action === 'signTraining') {
+      sh.appendRow([Utilities.getUuid(), new Date().toISOString(), safeCell(person.key), safeCell(trainingId), Number(p.laps)]);
+    }
+    return null;
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+// Служебные листы создаются сами: строка 1 — заголовки, строка 2 — подсказки.
+function ensureSheet(name, headers, hints) {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
-  let sh = ss.getSheetByName(INCOME_SHEET);
+  let sh = ss.getSheetByName(name);
   if (!sh) {
-    sh = ss.insertSheet(INCOME_SHEET);
-    sh.appendRow(INCOME_HEADERS);
-    sh.appendRow(['Заполняется из приложения', 'Не редактировать вручную без нужды', 'Ник или ID', 'ID из «Событий»', 'Рубли', '']);
+    sh = ss.insertSheet(name);
+    sh.appendRow(headers);
+    sh.appendRow(hints);
     sh.setFrozenRows(2);
   }
   return sh;
@@ -450,6 +495,89 @@ function canAddIncome(events, person, raceId) {
   return !!e && e.crews.some((c) => listsPerson(c.managers, person));
 }
 
+// ---- Открытые тренировки (лист «Тренировки») ----
+// Админ не вписывает пилотов: каждый сам отмечает «Поеду» и число заездов.
+const DEFAULT_MAX_LAPS = 10;
+const MAX_LAPS_LIMIT = 30;
+
+function buildTrainings(rows) {
+  const out = [];
+  const seen = new Set();
+  for (const r of rows || []) {
+    const id = String(r['ID'] || '').trim();
+    const date = parseDate(r['Дата']);
+    if (!id || !date || seen.has(id)) continue;
+    seen.add(id);
+    const championship = String(r['Чемпионат'] || '').trim();
+    const max = parseInt(String(r['Макс. заездов'] || '').trim(), 10);
+    out.push({
+      id,
+      type: 'Тренировка',
+      championship,
+      title: String(r['Название'] || '').trim() || [championship, 'Тренировка'].filter(Boolean).join(' — '),
+      date,
+      start: parseTime(r['Начало']),
+      end: parseTime(r['Окончание']),
+      track: String(r['Трасса'] || '').trim(),
+      address: String(r['Адрес'] || '').trim(),
+      lapCostText: String(r['Стоимость заезда'] || '').trim(),
+      lapCost: parseMoney(r['Стоимость заезда']),
+      maxLaps: max > 0 ? Math.min(max, MAX_LAPS_LIMIT) : DEFAULT_MAX_LAPS,
+      description: String(r['Описание'] || '').trim(),
+      cancelled: String(r['Статус'] || '').trim().toLowerCase().startsWith('отмен'),
+    });
+  }
+  return out;
+}
+
+// Записи с листа «Записи на тренировки». Если строк на одного пилота несколько, действует последняя.
+function buildSignups(rows) {
+  const map = new Map();
+  for (const r of rows || []) {
+    const pilot = normHandle(r['Пилот']);
+    const trainingId = String(r['ID тренировки'] || '').trim();
+    const laps = parseInt(String(r['Заездов'] || '').trim(), 10);
+    if (!pilot || !trainingId || !(laps > 0)) continue;
+    map.set(pilot + '|' + trainingId, { id: String(r['ID'] || '').trim(), pilot, trainingId, laps });
+  }
+  return [...map.values()];
+}
+
+// Проверка записи: тренировка есть, не отменена, заездов от 1 до максимума.
+function canSignTraining(trainings, trainingId, laps) {
+  const t = trainings.find((x) => x.id === trainingId);
+  if (!t || t.cancelled) return 'no_training';
+  if (!/^\d+$/.test(String(laps).trim()) || +laps < 1 || +laps > t.maxLaps) return 'bad_laps';
+  return '';
+}
+
+const lapsWord = (n) =>
+  n % 10 === 1 && n % 100 !== 11 ? 'заезд' : [2, 3, 4].includes(n % 10) && ![12, 13, 14].includes(n % 100) ? 'заезда' : 'заездов';
+
+// Траты на тренировки: стоимость заезда × число заездов.
+function buildTrainingSpent(trainings, signups, person) {
+  const byId = new Map(trainings.map((t) => [t.id, t]));
+  const items = [];
+  for (const s of signups) {
+    if (!person.keys.includes(s.pilot)) continue;
+    const t = byId.get(s.trainingId);
+    if (!t || t.cancelled || !t.lapCost) continue;
+    items.push({
+      raceId: t.id,
+      title: t.title,
+      date: isoDate(t.date),
+      category: 'Тренировки',
+      amount: Math.round(t.lapCost * s.laps * 100) / 100,
+      fullCost: 0,
+      split: 0,
+      laps: s.laps,
+      lapCost: t.lapCost,
+      note: '',
+    });
+  }
+  return items;
+}
+
 // Сборка ответа для экрана приложения.
 function buildView(data, tgUser, timezone) {
   const allEvents = buildEvents(data['События']);
@@ -503,13 +631,50 @@ function buildView(data, tgUser, timezone) {
     }))
     .sort((a, b) => (a.date + a.start).localeCompare(b.date + b.start));
 
+  // Открытые тренировки видят все, у кого есть доступ.
+  const trainings = buildTrainings(data['Тренировки']);
+  const signups = buildSignups(data['Записи на тренировки']);
+  const openTrainings = trainings
+    .map((t) => {
+      const going = signups.filter((s) => s.trainingId === t.id);
+      const mine = going.find((s) => person.keys.includes(s.pilot));
+      const calEvent = {
+        ...t,
+        stageLabel: '',
+        format: '',
+        cost: t.lapCostText ? `${t.lapCostText} за заезд` + (mine ? `, ${mine.laps} ${lapsWord(mine.laps)}` : '') : '',
+        rules: '',
+        crews: [],
+      };
+      return {
+        id: t.id,
+        title: t.title,
+        championship: t.championship,
+        date: isoDate(t.date),
+        start: t.start ? `${pad(t.start.h)}:${pad(t.start.min)}` : '',
+        end: t.end ? `${pad(t.end.h)}:${pad(t.end.min)}` : '',
+        track: t.track,
+        address: t.address,
+        lapCost: t.lapCost,
+        lapCostText: t.lapCostText,
+        maxLaps: t.maxLaps,
+        description: t.description,
+        cancelled: t.cancelled,
+        calendarUrl: googleCalendarUrl(calEvent, timezone, nameOf),
+        myLaps: mine ? mine.laps : 0,
+        going: going.map((s) => ({ ...personCard(s.pilot), laps: s.laps })),
+      };
+    })
+    .sort((a, b) => (a.date + a.start).localeCompare(b.date + b.start));
+
   const races = managedRaces(allEvents, person);
   return {
     access: true,
     me: { name: person.name, roles: person.roles },
     events,
+    trainings: openTrainings,
     finance: {
-      spent: buildSpent(allEvents, person),
+      spent: [...buildSpent(allEvents, person), ...buildTrainingSpent(trainings, signups, person)],
       earned: buildEarned(allEvents, person, data['Заработок']),
       // Блок «Заработано» — для менеджеров и тех, кого вписали менеджером гонки.
       canEarn: person.roles.manager || races.length > 0,

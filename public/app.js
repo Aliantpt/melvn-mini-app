@@ -5,11 +5,14 @@
   const who = document.getElementById('who');
   let view = null;
   let tab = 'upcoming';
-  let mainView = 'list'; // «Список гонок» или «Календарь»
+  let mainView = 'list'; // «Список гонок», «Календарь», «Тренировки» или «Финансы»
   let calCursor = null; // показываемый месяц {y, m}; null — текущий
   let calSelected = null; // выбранный день 'YYYY-MM-DD'
   let finCursor = null; // месяц во вкладке «Финансы»
   let finAll = false; // «Всё время» вместо месяца
+  let trTab = 'upcoming'; // вкладка «Тренировки»: предстоящие или прошедшие
+  let trPick = null; // открытый выбор заездов {id, laps}
+  let trDetail = null; // открытая карточка тренировки
   // Выбранные чемпионаты; пустой список — показывать все.
   let champFilter = [];
   const NO_CHAMP = '__none__';
@@ -323,7 +326,7 @@
           <span class="swatch small-sw" style="background:${colors[x.category]}"></span>
           <div class="fin-item-main">
             <div>${esc(x.title)}</div>
-            <div class="small">${esc(fmtDate(x.date))}${x.split ? ` · ${money(x.fullCost)} ÷ ${x.split} пил.` : ''}${x.note ? ' · ' + esc(x.note) : ''}</div>
+            <div class="small">${esc(fmtDate(x.date))}${x.split ? ` · ${money(x.fullCost)} ÷ ${x.split} пил.` : ''}${x.laps ? ` · ${x.laps} × ${money(x.lapCost)}` : ''}${x.note ? ' · ' + esc(x.note) : ''}</div>
           </div>
           <span class="fin-amt">${money(x.amount)}</span>
           ${kind === 'earned' && x.id ? `<button class="fin-del" data-del="${esc(x.id)}" aria-label="Удалить">×</button>` : ''}
@@ -337,7 +340,7 @@
       <div class="fin-total">${money(total)}</div>
       ${compare}
       ${groups.length ? donut(groups, total, colors, 'donut-' + kind) + `<div class="fin-legend">${legend}</div>` : `<div class="small" style="padding:8px 0">${empty}</div>`}
-      ${rows ? `<h3 style="margin-top:14px">По гонкам</h3>${rows}` : ''}
+      ${rows ? `<h3 style="margin-top:14px">По событиям</h3>${rows}` : ''}
     </div>`;
   }
 
@@ -398,7 +401,7 @@
       ${spentBlock}
       ${earnedBlock}
       ${summary}
-      <div class="small" style="text-align:center;margin-top:6px">Траты — из «Стоимости» ваших гонок; в командной гонке делятся на пилотов состава.</div>
+      <div class="small" style="text-align:center;margin-top:6px">Траты — из «Стоимости» ваших гонок (в командной гонке делятся на пилотов состава) и отмеченных заездов на тренировках.</div>
     `;
   }
 
@@ -482,7 +485,208 @@
     });
   }
 
+  // ---- Тренировки ----
+  // Открытые тренировки с листа «Тренировки»: пилот сам отмечает «Поеду» и число заездов.
+  const lapsWord = (n) =>
+    n % 10 === 1 && n % 100 !== 11 ? 'заезд' : [2, 3, 4].includes(n % 10) && ![12, 13, 14].includes(n % 100) ? 'заезда' : 'заездов';
+  const lapPrice = (t) => (t.lapCost ? money(t.lapCost) : t.lapCostText);
+
+  function trainingControls(t) {
+    if (t.cancelled) return '';
+    const past = t.date < today();
+    if (trPick && trPick.id === t.id) {
+      const n = trPick.laps;
+      const laps = Array.from({ length: t.maxLaps }, (_, i) => i + 1)
+        .map((i) => `<button class="lap ${i === n ? 'on' : ''}" data-lap="${i}">${i}</button>`)
+        .join('');
+      return `<div class="tr-pick">
+        <div class="small">Сколько заездов?</div>
+        <div class="laps">${laps}</div>
+        ${n && t.lapCost ? `<div class="tr-sum">${n} × ${money(t.lapCost)} = <b>${money(n * t.lapCost)}</b></div>` : ''}
+        <div class="tr-actions">
+          <button class="tr-btn ghost" data-pick-cancel>Отмена</button>
+          <button class="tr-btn" data-pick-ok ${n ? '' : 'disabled'}>Подтвердить</button>
+        </div>
+        <div class="small tr-msg" id="tr-msg"></div>
+      </div>`;
+    }
+    if (t.myLaps) {
+      const cost = t.lapCost ? ` · ${money(t.lapCost * t.myLaps)}` : '';
+      return `<div class="tr-mine">
+        <div><span class="you">${past ? 'вы ездили' : 'вы едете'}</span> ${t.myLaps} ${lapsWord(t.myLaps)}${cost}</div>
+        <div class="tr-actions">
+          <button class="tr-btn ghost" data-pick="${esc(t.id)}">Изменить</button>
+          <button class="tr-btn ghost" data-unsign="${esc(t.id)}">${past ? 'Не ездил' : 'Не поеду'}</button>
+        </div>
+        <div class="small tr-msg" id="tr-msg"></div>
+      </div>`;
+    }
+    return `<button class="tr-btn wide" data-pick="${esc(t.id)}">${past ? 'Отметить, что ездил' : 'Поеду'}</button>`;
+  }
+
+  function trainingCard(t) {
+    const meta = [fmtDate(t.date), fmtTime(t), t.track].filter(Boolean).map(esc).join(' · ');
+    const price = lapPrice(t) ? `${esc(lapPrice(t))} за заезд` : '';
+    const going = t.going.length ? `едут: ${t.going.length}` : '';
+    return `<div class="card tr-card ${t.cancelled ? 'cancelled' : ''} ${t.myLaps ? 'mine' : ''}">
+      <button class="tr-open" data-training="${esc(t.id)}">
+        ${t.championship && !t.title.startsWith(t.championship) ? `<div class="champ">${esc(t.championship)}</div>` : ''}
+        <div class="title">${esc(t.title)}</div>
+        <div class="meta">${meta}</div>
+        <div class="meta">${[price, going].filter(Boolean).join(' · ')}</div>
+        ${t.cancelled ? '<span class="badges"><span class="badge off">Отменено</span></span>' : ''}
+      </button>
+      ${trainingControls(t)}
+    </div>`;
+  }
+
+  function trainingsBody() {
+    const all = view.trainings;
+    if (!all) return '<div class="state">Обновите скрипт в таблице, чтобы увидеть тренировки.</div>';
+    const t = today();
+    const upcoming = all.filter((x) => x.date >= t);
+    const past = all.filter((x) => x.date < t).reverse();
+    const list = trTab === 'upcoming' ? upcoming : past;
+    return `
+      <div class="tabs">
+        <button class="tab ${trTab === 'upcoming' ? 'on' : ''}" data-trtab="upcoming">Предстоящие (${upcoming.length})</button>
+        <button class="tab ${trTab === 'past' ? 'on' : ''}" data-trtab="past">Прошедшие (${past.length})</button>
+      </div>
+      ${list.map(trainingCard).join('') || `<div class="state">${trTab === 'upcoming' ? 'Открытых тренировок пока нет.' : 'Прошедших тренировок нет.'}</div>`}
+      <div class="small" style="text-align:center;margin-top:6px">Отмеченные заезды попадают в «Финансы»: стоимость заезда × число заездов.</div>
+    `;
+  }
+
+  const TRAINING_ERRORS = {
+    bad_laps: 'Выберите число заездов.',
+    no_training: 'Эта тренировка отменена или удалена.',
+    no_access: 'Нет доступа.',
+    too_many: 'Слишком много изменений подряд. Попробуйте через час.',
+  };
+
+  async function trainingRequest(params) {
+    const msg = document.getElementById('tr-msg');
+    app.querySelectorAll('.tr-btn').forEach((b) => (b.disabled = true));
+    if (msg) msg.textContent = 'Сохраняю…';
+    const res = await api(params);
+    if (res && res.access) {
+      view = res;
+      trPick = null;
+    } else if (msg) {
+      msg.textContent = TRAINING_ERRORS[res && res.error] || 'Не удалось сохранить, попробуйте ещё раз.';
+      app.querySelectorAll('.tr-btn').forEach((b) => (b.disabled = false));
+      return;
+    }
+    rerenderTrainings();
+  }
+
+  function rerenderTrainings() {
+    if (trDetail) renderTraining(trDetail);
+    else renderList();
+  }
+
+  function bindTrainings() {
+    app.querySelectorAll('[data-trtab]').forEach((b) =>
+      b.addEventListener('click', () => {
+        trTab = b.dataset.trtab;
+        trPick = null;
+        renderList();
+      }),
+    );
+    app.querySelectorAll('[data-training]').forEach((b) =>
+      b.addEventListener('click', () => {
+        trPick = null;
+        renderTraining(b.dataset.training);
+        window.scrollTo(0, 0);
+      }),
+    );
+    app.querySelectorAll('[data-pick]').forEach((b) =>
+      b.addEventListener('click', () => {
+        const t = view.trainings.find((x) => x.id === b.dataset.pick);
+        trPick = { id: b.dataset.pick, laps: (t && t.myLaps) || 0 };
+        rerenderTrainings();
+      }),
+    );
+    app.querySelectorAll('[data-lap]').forEach((b) =>
+      b.addEventListener('click', () => {
+        trPick.laps = Number(b.dataset.lap);
+        rerenderTrainings();
+      }),
+    );
+    const cancel = app.querySelector('[data-pick-cancel]');
+    if (cancel)
+      cancel.addEventListener('click', () => {
+        trPick = null;
+        rerenderTrainings();
+      });
+    const ok = app.querySelector('[data-pick-ok]');
+    if (ok) ok.addEventListener('click', () => trainingRequest({ action: 'signTraining', trainingId: trPick.id, laps: trPick.laps }));
+    app.querySelectorAll('[data-unsign]').forEach((b) =>
+      b.addEventListener('click', async () => {
+        if (!(await confirmBox('Убрать отметку с этой тренировки?'))) return;
+        trainingRequest({ action: 'unsignTraining', trainingId: b.dataset.unsign });
+      }),
+    );
+  }
+
+  function closeTraining() {
+    trDetail = null;
+    trPick = null;
+    if (tg) tg.BackButton.offClick(closeTraining);
+    renderList();
+  }
+
+  function renderTraining(id) {
+    const t = view.trainings.find((x) => x.id === id);
+    if (!t) return closeTraining();
+    trDetail = id;
+    if (tg) {
+      tg.BackButton.show();
+      tg.BackButton.offClick(renderList);
+      tg.BackButton.offClick(closeTraining);
+      tg.BackButton.onClick(closeTraining);
+    }
+    const kv = (k, v) => (v ? `<div class="kv"><span>${esc(k)}</span><span>${v}</span></div>` : '');
+    const going = t.going.length
+      ? t.going.map((p) => personLine(p, ` · ${p.laps} ${lapsWord(p.laps)}`)).join('')
+      : '<div class="small">Пока никто не отметился.</div>';
+    app.innerHTML = `
+      ${tg ? '' : '<button class="back">‹ Назад</button>'}
+      <div class="section">
+        ${t.championship && !t.title.startsWith(t.championship) ? `<div class="champ">${esc(t.championship)}</div>` : ''}
+        <div class="title" style="font-weight:700;font-size:19px">${esc(t.title)}</div>
+        <div class="meta small" style="margin-top:4px">${esc(fmtDate(t.date))}${t.start ? ' · ' + esc(fmtTime(t)) : ''}</div>
+        <span class="badges">${t.cancelled ? '<span class="badge off">Отменено</span>' : '<span class="badge">Тренировка</span>'}${t.myLaps ? '<span class="badge role">Пилот</span>' : ''}</span>
+        ${trainingControls(t)}
+      </div>
+      <div class="section">
+        <h3>Детали</h3>
+        ${kv('Трасса', esc(t.track))}
+        ${kv('Адрес', t.address ? `<a href="https://yandex.ru/maps/?text=${encodeURIComponent(t.address)}" data-ext>${esc(t.address)}</a>` : '')}
+        ${kv('Стоимость заезда', esc(lapPrice(t)))}
+        ${kv('Максимум заездов', String(t.maxLaps))}
+      </div>
+      ${t.description ? `<div class="section"><h3>Описание</h3><div class="desc">${esc(t.description)}</div></div>` : ''}
+      <div class="section"><h3>Едут (${t.going.length})</h3>${going}</div>
+      ${t.cancelled ? '' : '<button class="cal" data-gcal>Добавить в Google Календарь</button>'}
+    `;
+    const back = app.querySelector('.back');
+    if (back) back.addEventListener('click', closeTraining);
+    const cal = app.querySelector('[data-gcal]');
+    if (cal) cal.addEventListener('click', () => openLink(t.calendarUrl));
+    app.querySelectorAll('a[data-ext]').forEach((a) =>
+      a.addEventListener('click', (ev) => {
+        ev.preventDefault();
+        const href = a.getAttribute('href');
+        if (tg && href.startsWith('https://t.me/') && tg.openTelegramLink) tg.openTelegramLink(href);
+        else openLink(href);
+      }),
+    );
+    bindTrainings();
+  }
+
   function renderList() {
+    trDetail = null;
     if (tg) tg.BackButton.hide();
 
     // Чемпионаты из событий человека; выбор, которого больше нет, игнорируется.
@@ -509,13 +713,15 @@
       <div class="nav">
         <button class="nav-btn ${mainView === 'list' ? 'on' : ''}" data-view="list">Список гонок</button>
         <button class="nav-btn ${mainView === 'calendar' ? 'on' : ''}" data-view="calendar">Календарь</button>
+        <button class="nav-btn ${mainView === 'trainings' ? 'on' : ''}" data-view="trainings">Тренировки</button>
         <button class="nav-btn ${mainView === 'finance' ? 'on' : ''}" data-view="finance">Финансы</button>
       </div>
-      ${mainView === 'finance' ? financeBody() : chips + (mainView === 'calendar' ? calendarBody(shown) : listBody(shown))}
+      ${mainView === 'finance' ? financeBody() : mainView === 'trainings' ? trainingsBody() : chips + (mainView === 'calendar' ? calendarBody(shown) : listBody(shown))}
     `;
     app.querySelectorAll('[data-view]').forEach((b) =>
       b.addEventListener('click', () => {
         mainView = b.dataset.view;
+        trPick = null;
         renderList();
       }),
     );
@@ -558,6 +764,7 @@
       b.addEventListener('click', () => renderEvent(b.dataset.id)),
     );
     if (mainView === 'finance') bindFinance();
+    if (mainView === 'trainings') bindTrainings();
   }
 
   const FORMAT = { team: 'Командная', solo: 'Личная' };
@@ -571,10 +778,10 @@
     return `<span class="badges">${type}${format}${roles}</span>`;
   }
 
-  function personLine(p) {
+  function personLine(p, extra = '') {
     const phone = p.phone ? ` <span class="small">${esc(p.phone)}</span>` : '';
     const name = p.handle ? `<a href="https://t.me/${esc(p.handle)}" data-ext>${esc(p.name)}</a>` : esc(p.name);
-    return `<div class="person ${p.me ? 'me' : ''}">${name}${p.me ? ' <span class="you">вы</span>' : ''}${phone}</div>`;
+    return `<div class="person ${p.me ? 'me' : ''}">${name}${p.me ? ' <span class="you">вы</span>' : ''}${extra}${phone}</div>`;
   }
 
   function renderEvent(id) {

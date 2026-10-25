@@ -275,6 +275,89 @@ export function canAddIncome(events, person, raceId) {
   return !!e && e.crews.some((c) => listsPerson(c.managers, person));
 }
 
+// ---- Открытые тренировки (лист «Тренировки») ----
+// Админ не вписывает пилотов: каждый сам отмечает «Поеду» и число заездов.
+export const DEFAULT_MAX_LAPS = 10;
+const MAX_LAPS_LIMIT = 30;
+
+export function buildTrainings(rows) {
+  const out = [];
+  const seen = new Set();
+  for (const r of rows || []) {
+    const id = String(r['ID'] || '').trim();
+    const date = parseDate(r['Дата']);
+    if (!id || !date || seen.has(id)) continue;
+    seen.add(id);
+    const championship = String(r['Чемпионат'] || '').trim();
+    const max = parseInt(String(r['Макс. заездов'] || '').trim(), 10);
+    out.push({
+      id,
+      type: 'Тренировка',
+      championship,
+      title: String(r['Название'] || '').trim() || [championship, 'Тренировка'].filter(Boolean).join(' — '),
+      date,
+      start: parseTime(r['Начало']),
+      end: parseTime(r['Окончание']),
+      track: String(r['Трасса'] || '').trim(),
+      address: String(r['Адрес'] || '').trim(),
+      lapCostText: String(r['Стоимость заезда'] || '').trim(),
+      lapCost: parseMoney(r['Стоимость заезда']),
+      maxLaps: max > 0 ? Math.min(max, MAX_LAPS_LIMIT) : DEFAULT_MAX_LAPS,
+      description: String(r['Описание'] || '').trim(),
+      cancelled: String(r['Статус'] || '').trim().toLowerCase().startsWith('отмен'),
+    });
+  }
+  return out;
+}
+
+// Записи с листа «Записи на тренировки». Если строк на одного пилота несколько, действует последняя.
+export function buildSignups(rows) {
+  const map = new Map();
+  for (const r of rows || []) {
+    const pilot = normHandle(r['Пилот']);
+    const trainingId = String(r['ID тренировки'] || '').trim();
+    const laps = parseInt(String(r['Заездов'] || '').trim(), 10);
+    if (!pilot || !trainingId || !(laps > 0)) continue;
+    map.set(pilot + '|' + trainingId, { id: String(r['ID'] || '').trim(), pilot, trainingId, laps });
+  }
+  return [...map.values()];
+}
+
+// Проверка записи: тренировка есть, не отменена, заездов от 1 до максимума.
+export function canSignTraining(trainings, trainingId, laps) {
+  const t = trainings.find((x) => x.id === trainingId);
+  if (!t || t.cancelled) return 'no_training';
+  if (!/^\d+$/.test(String(laps).trim()) || +laps < 1 || +laps > t.maxLaps) return 'bad_laps';
+  return '';
+}
+
+const lapsWord = (n) =>
+  n % 10 === 1 && n % 100 !== 11 ? 'заезд' : [2, 3, 4].includes(n % 10) && ![12, 13, 14].includes(n % 100) ? 'заезда' : 'заездов';
+
+// Траты на тренировки: стоимость заезда × число заездов.
+export function buildTrainingSpent(trainings, signups, person) {
+  const byId = new Map(trainings.map((t) => [t.id, t]));
+  const items = [];
+  for (const s of signups) {
+    if (!person.keys.includes(s.pilot)) continue;
+    const t = byId.get(s.trainingId);
+    if (!t || t.cancelled || !t.lapCost) continue;
+    items.push({
+      raceId: t.id,
+      title: t.title,
+      date: isoDate(t.date),
+      category: 'Тренировки',
+      amount: Math.round(t.lapCost * s.laps * 100) / 100,
+      fullCost: 0,
+      split: 0,
+      laps: s.laps,
+      lapCost: t.lapCost,
+      note: '',
+    });
+  }
+  return items;
+}
+
 // Сборка ответа для экрана приложения.
 export function buildView(data, tgUser, timezone) {
   const allEvents = buildEvents(data['События']);
@@ -328,13 +411,50 @@ export function buildView(data, tgUser, timezone) {
     }))
     .sort((a, b) => (a.date + a.start).localeCompare(b.date + b.start));
 
+  // Открытые тренировки видят все, у кого есть доступ.
+  const trainings = buildTrainings(data['Тренировки']);
+  const signups = buildSignups(data['Записи на тренировки']);
+  const openTrainings = trainings
+    .map((t) => {
+      const going = signups.filter((s) => s.trainingId === t.id);
+      const mine = going.find((s) => person.keys.includes(s.pilot));
+      const calEvent = {
+        ...t,
+        stageLabel: '',
+        format: '',
+        cost: t.lapCostText ? `${t.lapCostText} за заезд` + (mine ? `, ${mine.laps} ${lapsWord(mine.laps)}` : '') : '',
+        rules: '',
+        crews: [],
+      };
+      return {
+        id: t.id,
+        title: t.title,
+        championship: t.championship,
+        date: isoDate(t.date),
+        start: t.start ? `${pad(t.start.h)}:${pad(t.start.min)}` : '',
+        end: t.end ? `${pad(t.end.h)}:${pad(t.end.min)}` : '',
+        track: t.track,
+        address: t.address,
+        lapCost: t.lapCost,
+        lapCostText: t.lapCostText,
+        maxLaps: t.maxLaps,
+        description: t.description,
+        cancelled: t.cancelled,
+        calendarUrl: googleCalendarUrl(calEvent, timezone, nameOf),
+        myLaps: mine ? mine.laps : 0,
+        going: going.map((s) => ({ ...personCard(s.pilot), laps: s.laps })),
+      };
+    })
+    .sort((a, b) => (a.date + a.start).localeCompare(b.date + b.start));
+
   const races = managedRaces(allEvents, person);
   return {
     access: true,
     me: { name: person.name, roles: person.roles },
     events,
+    trainings: openTrainings,
     finance: {
-      spent: buildSpent(allEvents, person),
+      spent: [...buildSpent(allEvents, person), ...buildTrainingSpent(trainings, signups, person)],
       earned: buildEarned(allEvents, person, data['Заработок']),
       // Блок «Заработано» — для менеджеров и тех, кого вписали менеджером гонки.
       canEarn: person.roles.manager || races.length > 0,

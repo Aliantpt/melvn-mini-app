@@ -2,6 +2,7 @@
 // Приложение вызывает: GET <URL веб-приложения>?initData=<Telegram.WebApp.initData>
 // Запись дохода менеджером: те же параметры + action=addIncome&raceId=&amount=&note=
 // Удаление своей записи: action=deleteIncome&id=
+// Запись на тренировку: action=signTraining&trainingId=&laps=; отказ: action=unsignTraining&trainingId=
 
 // Токен бота хранится в свойствах скрипта (Настройки проекта → Свойства скрипта → BOT_TOKEN),
 // чтобы при обновлении кода его не нужно было вписывать заново.
@@ -10,9 +11,16 @@ function botToken() {
 }
 
 const TIMEZONE = 'Europe/Moscow';
-const SHEETS = ['Люди', 'События', 'Заработок'];
+const SHEETS = ['Люди', 'События', 'Заработок', 'Тренировки', 'Записи на тренировки'];
 const INCOME_SHEET = 'Заработок';
 const INCOME_HEADERS = ['ID', 'Дата записи', 'Менеджер', 'ID гонки', 'Сумма', 'Комментарий'];
+const INCOME_HINTS = ['Заполняется из приложения', 'Не редактировать вручную без нужды', 'Ник или ID', 'ID из «Событий»', 'Рубли', ''];
+const TRAININGS_SHEET = 'Тренировки';
+const TRAININGS_HEADERS = ['ID', 'Чемпионат', 'Название', 'Дата', 'Начало', 'Окончание', 'Трасса', 'Адрес', 'Стоимость заезда', 'Макс. заездов', 'Описание', 'Статус'];
+const TRAININGS_HINTS = ['Т1, Т2…', 'Необязательно', 'Если пусто — «Тренировка»', 'ДД.ММ.ГГГГ', 'ЧЧ:ММ', 'ЧЧ:ММ', '', '', 'Рубли за один заезд', 'Пусто — до 10', '', 'Отменена — скрыть из расходов'];
+const SIGNUP_SHEET = 'Записи на тренировки';
+const SIGNUP_HEADERS = ['ID', 'Дата записи', 'Пилот', 'ID тренировки', 'Заездов'];
+const SIGNUP_HINTS = ['Заполняется из приложения', 'Не редактировать вручную без нужды', 'Ник или ID', 'ID из «Тренировок»', 'Число'];
 // Подпись Telegram действует сутки: перехваченную ссылку нельзя использовать долго.
 const MAX_AUTH_AGE_SECONDS = 24 * 3600;
 const MAX_INCOME = 10000000;
@@ -23,9 +31,15 @@ function doGet(e) {
   const user = verifyInitData(initData, botToken());
   if (!user) return jsonOut({ error: 'not_telegram' });
   try {
+    // Лист «Тренировки» появляется сам при первом открытии приложения после обновления скрипта.
+    ensureSheet(TRAININGS_SHEET, TRAININGS_HEADERS, TRAININGS_HINTS);
     const action = e.parameter.action || '';
     if (action === 'addIncome' || action === 'deleteIncome') {
       const result = changeIncome(action, e.parameter, user);
+      if (result) return jsonOut(result);
+    }
+    if (action === 'signTraining' || action === 'unsignTraining') {
+      const result = changeSignup(action, e.parameter, user);
       if (result) return jsonOut(result);
     }
     return jsonOut(buildView(readSheets(), user, TIMEZONE));
@@ -65,7 +79,7 @@ function changeIncome(action, p, user) {
     const person = findPerson(buildPeople(data['Люди']), user);
     if (!person || !person.active) return { error: 'no_access' };
     if (!allowWrite(person.key)) return { error: 'too_many' };
-    const sh = incomeSheet();
+    const sh = ensureSheet(INCOME_SHEET, INCOME_HEADERS, INCOME_HINTS);
 
     if (action === 'addIncome') {
       const raceId = String(p.raceId || '').trim();
@@ -109,14 +123,45 @@ function allowWrite(key) {
   return true;
 }
 
-// Лист «Заработок» создаётся сам при первой записи.
-function incomeSheet() {
+// Запись на тренировку или отказ. Пилот меняет только свои записи.
+// Возвращает объект с ошибкой или null при успехе.
+function changeSignup(action, p, user) {
+  const lock = LockService.getScriptLock();
+  lock.waitLock(10000);
+  try {
+    const data = readSheets();
+    const person = findPerson(buildPeople(data['Люди']), user);
+    if (!person || !person.active) return { error: 'no_access' };
+    const trainingId = String(p.trainingId || '').trim();
+    if (action === 'signTraining') {
+      const err = canSignTraining(buildTrainings(data[TRAININGS_SHEET]), trainingId, String(p.laps || ''));
+      if (err) return { error: err };
+    }
+    if (!allowWrite(person.key)) return { error: 'too_many' };
+    const sh = ensureSheet(SIGNUP_SHEET, SIGNUP_HEADERS, SIGNUP_HINTS);
+
+    // Прежняя запись на эту тренировку удаляется, новая добавляется в конец.
+    const values = sh.getDataRange().getDisplayValues();
+    for (let i = values.length - 1; i >= 2; i--) {
+      if (String(values[i][3]).trim() === trainingId && person.keys.includes(normHandle(values[i][2]))) sh.deleteRow(i + 1);
+    }
+    if (action === 'signTraining') {
+      sh.appendRow([Utilities.getUuid(), new Date().toISOString(), safeCell(person.key), safeCell(trainingId), Number(p.laps)]);
+    }
+    return null;
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+// Служебные листы создаются сами: строка 1 — заголовки, строка 2 — подсказки.
+function ensureSheet(name, headers, hints) {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
-  let sh = ss.getSheetByName(INCOME_SHEET);
+  let sh = ss.getSheetByName(name);
   if (!sh) {
-    sh = ss.insertSheet(INCOME_SHEET);
-    sh.appendRow(INCOME_HEADERS);
-    sh.appendRow(['Заполняется из приложения', 'Не редактировать вручную без нужды', 'Ник или ID', 'ID из «Событий»', 'Рубли', '']);
+    sh = ss.insertSheet(name);
+    sh.appendRow(headers);
+    sh.appendRow(hints);
     sh.setFrozenRows(2);
   }
   return sh;
