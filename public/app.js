@@ -170,10 +170,14 @@
     </button>`;
   }
 
+  // По дате и времени: предстоящие от ближайших, прошедшие от недавних.
+  const when = (e) => e.date + ' ' + (e.start || '');
+  const byWhen = (a, b) => (when(a) < when(b) ? -1 : when(a) > when(b) ? 1 : 0);
+
   function listBody(shown) {
     const t = today();
-    const upcoming = shown.filter((e) => e.date >= t);
-    const past = shown.filter((e) => e.date < t).reverse();
+    const upcoming = shown.filter((e) => e.date >= t).sort(byWhen);
+    const past = shown.filter((e) => e.date < t).sort(byWhen).reverse();
     const list = tab === 'upcoming' ? upcoming : past;
     return `
       <div class="tabs">
@@ -325,7 +329,7 @@
 
     const rows = items
       .slice()
-      .sort((a, b) => b.date.localeCompare(a.date))
+      .sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0))
       .map(
         (x) => `<div class="fin-item">
           <span class="swatch small-sw" style="background:${colors[x.category]}"></span>
@@ -569,8 +573,8 @@
     const shown = all.filter(
       (x) => (!tracks.includes(trFilter.track) || x.track === trFilter.track) && (!kinds.includes(trFilter.kind) || x.kind === trFilter.kind),
     );
-    const upcoming = shown.filter((x) => x.date >= t);
-    const past = shown.filter((x) => x.date < t).reverse();
+    const upcoming = shown.filter((x) => x.date >= t).sort(byWhen);
+    const past = shown.filter((x) => x.date < t).sort(byWhen).reverse();
     const list = trTab === 'upcoming' ? upcoming : past;
     return `
       ${chipRow('kind', kinds, 'Все типы')}

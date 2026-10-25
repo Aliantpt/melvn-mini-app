@@ -365,3 +365,14 @@ test('Apps Script: missing training columns are added to an existing sheet', () 
   assert.ok(h.includes('Тип') && h.includes('Мин. заездов') && h.includes('Макс. заездов'));
   assert.equal(new Set(h).size, h.length);
 });
+
+test('events and trainings come in calendar order, nearest first', () => {
+  const ev = (ID, d, t) => ({ ID, 'Тип': 'Гонка', 'Дата': d, 'Начало': t, 'Пилоты': 'ivan_petrov' });
+  const tr = (ID, d, t) => ({ ID, 'Дата': d, 'Начало': t });
+  const d = { ...data,
+    'События': [ev('C', '01.12.2026', '10:00'), ev('A', '5.11.2026', ''), ev('B', '05.11.2026', '09:00'), ev('D', '2026-10-30', '')],
+    'Тренировки': [tr('t3', '10.12.2026', ''), tr('t1', '02.11.2026', '18:00'), tr('t2', '02.11.2026', '19:00')] };
+  const v = buildView(d, { username: 'ivan_petrov' });
+  assert.deepEqual(v.events.map((e) => e.id), ['D', 'A', 'B', 'C']);
+  assert.deepEqual(v.trainings.map((t) => t.id), ['t1', 't2', 't3']);
+});

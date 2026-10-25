@@ -267,6 +267,11 @@ function parseTime(v) {
 
 const pad = (n) => String(n).padStart(2, '0');
 
+// Простое сравнение строк: у localeCompare в Apps Script порядок может отличаться.
+const cmp = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
+// По дате и времени начала, от ранних к поздним.
+const byWhen = (a, b) => cmp(a.date + ' ' + (a.start || ''), b.date + ' ' + (b.start || ''));
+
 // Человека можно указать ником или числовым Telegram ID — подходят оба.
 function buildPeople(rows) {
   const people = [];
@@ -497,7 +502,7 @@ function managedRaces(events, person) {
   return events
     .filter((e) => e.crews.some((c) => listsPerson(c.managers, person)))
     .map((e) => ({ id: e.id, title: e.title, date: isoDate(e.date) }))
-    .sort((a, b) => b.date.localeCompare(a.date));
+    .sort((a, b) => cmp(b.date, a.date));
 }
 
 function canAddIncome(events, person, raceId) {
@@ -644,7 +649,7 @@ function buildView(data, tgUser, timezone) {
         mine: inCrew(c, person),
       })),
     }))
-    .sort((a, b) => (a.date + a.start).localeCompare(b.date + b.start));
+    .sort(byWhen);
 
   // Открытые тренировки видят все, у кого есть доступ.
   const trainings = buildTrainings(data['Тренировки']);
@@ -683,7 +688,7 @@ function buildView(data, tgUser, timezone) {
         going: going.map((s) => ({ ...personCard(s.pilot), laps: s.laps })),
       };
     })
-    .sort((a, b) => (a.date + a.start).localeCompare(b.date + b.start));
+    .sort(byWhen);
 
   const races = managedRaces(allEvents, person);
   return {
