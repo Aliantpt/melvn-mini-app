@@ -41,6 +41,51 @@
     return `${t.getFullYear()}-${String(t.getMonth() + 1).padStart(2, '0')}-${String(t.getDate()).padStart(2, '0')}`;
   };
 
+  // Приветствие по времени суток на устройстве.
+  function greeting(hour) {
+    if (hour >= 5 && hour < 12) return 'Доброе утро';
+    if (hour >= 12 && hour < 17) return 'Добрый день';
+    if (hour >= 17 && hour < 23) return 'Добрый вечер';
+    return 'Доброй ночи';
+  }
+
+  // Имя из таблицы запоминается на устройстве, чтобы со второго запуска
+  // приветствовать по нему сразу. В первый раз — имя из Telegram, пока грузятся данные.
+  const NAME_KEY = 'me_name';
+  const SPLASH_MIN_MS = 1200;
+  const splashStart = Date.now();
+  const splash = document.getElementById('splash');
+  const splashName = document.getElementById('splash-name');
+  function savedName() {
+    try {
+      return localStorage.getItem(NAME_KEY) || '';
+    } catch (e) {
+      return '';
+    }
+  }
+  function showSplash() {
+    document.getElementById('splash-hello').textContent = greeting(new Date().getHours()) + ',';
+    const tgUser = tg && tg.initDataUnsafe && tg.initDataUnsafe.user;
+    splashName.textContent = savedName() || (tgUser && tgUser.first_name) || '';
+  }
+  async function hideSplash(name) {
+    let wait = SPLASH_MIN_MS - (Date.now() - splashStart);
+    if (name && name !== splashName.textContent) {
+      // Имя сменилось на имя из таблицы — дать его прочитать.
+      splashName.textContent = name;
+      wait = Math.max(wait, 800);
+    }
+    try {
+      // Пустое имя — доступа больше нет, забыть сохранённое.
+      if (name) localStorage.setItem(NAME_KEY, name);
+      else if (name === '') localStorage.removeItem(NAME_KEY);
+    } catch (e) {}
+    if (wait > 0) await new Promise((r) => setTimeout(r, wait));
+    splash.classList.add('hide');
+    setTimeout(() => splash.remove(), 400);
+  }
+  showSplash();
+
   function state(title, text) {
     app.innerHTML = `<div class="state"><b>${esc(title)}</b>${text}</div>`;
   }
@@ -607,11 +652,13 @@
   async function load() {
     const initData = tg ? tg.initData : '';
     if (!initData) {
+      hideSplash();
       return state('Откройте через Telegram', 'Это приложение работает только внутри бота команды M-ELVN.');
     }
     try {
       const body = await api();
       if (!body) throw new Error('network');
+      if (!body.access) await hideSplash(body.access === false ? '' : undefined);
       if (body.error === 'not_telegram') {
         return state('Не удалось проверить вход', 'Закройте приложение и откройте его снова из бота.');
       }
@@ -626,7 +673,9 @@
       who.innerHTML = `${esc(view.me.name)}<br>${esc(roleNames(view.me.roles))}`;
       champFilter = await loadFilter();
       renderList();
+      await hideSplash(view.me.name);
     } catch (e) {
+      hideSplash();
       state('Нет связи', 'Проверьте интернет и откройте приложение снова.');
     }
   }

@@ -11,6 +11,13 @@
   <link rel="stylesheet" href="style.css?v=dev">
 </head>
 <body>
+  <!-- Приветственный экран: виден, пока загружаются данные. Текст подставляет app.js. -->
+  <div class="splash" id="splash" aria-live="polite">
+    <div class="splash-brand">M-ELVN</div>
+    <div class="splash-hello" id="splash-hello"></div>
+    <div class="splash-name" id="splash-name"></div>
+    <div class="splash-bar"><span></span></div>
+  </div>
   <header class="top">
     <div class="brand">M-ELVN</div>
     <div class="who" id="who"></div>
