@@ -842,8 +842,8 @@
       .map(
         (c) => `<div class="section crew ${c.mine ? 'mine' : ''}">
           <h3>${esc(c.name || defaultTitle)}${c.mine ? ' <span class="you">ваш состав</span>' : ''}</h3>
-          ${c.pilots.map(personLine).join('')}
-          ${c.managers.length ? `<div class="role-label">Менеджер</div>${c.managers.map(personLine).join('')}` : ''}
+          ${c.pilots.map((p) => personLine(p)).join('')}
+          ${c.managers.length ? `<div class="role-label">Менеджер</div>${c.managers.map((p) => personLine(p)).join('')}` : ''}
         </div>`,
       )
       .join('');
