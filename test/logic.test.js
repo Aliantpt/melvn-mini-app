@@ -208,6 +208,12 @@ function loadGas(botToken, sheets) {
       getDataRange: () => ({ getDisplayValues: () => sheets[name].map((r) => r.map(String)) }),
       appendRow: (row) => sheets[name].push(row),
       deleteRow: (n) => sheets[name].splice(n - 1, 1),
+      getRange: (row, col) => ({
+        setValue: (v) => {
+          while (sheets[name].length < row) sheets[name].push([]);
+          sheets[name][row - 1][col - 1] = v;
+        },
+      }),
       setFrozenRows() {},
     };
   }
@@ -294,7 +300,7 @@ test('Apps Script: errors do not leak details', () => {
 });
 
 const trainingRows = [
-  { ID: 'T1', 'Название': '', 'Чемпионат': 'PitStop', 'Дата': '08.11.2026', 'Начало': '12:00', 'Трасса': 'PitStop', 'Стоимость заезда': '1 500 ₽', 'Макс. заездов': '5' },
+  { ID: 'T1', 'Тип': 'Школа', 'Название': '', 'Дата': '08.11.2026', 'Начало': '12:00', 'Трасса': 'PitStop', 'Стоимость заезда': '1 500 ₽', 'Мин. заездов': '2', 'Макс. заездов': '5' },
   { ID: 'T2', 'Название': 'Вечерняя', 'Дата': '09.11.2026', 'Стоимость заезда': '2000', 'Статус': 'Отменена' },
 ];
 
@@ -306,7 +312,7 @@ test('trainings: everyone with access sees them; signup laps × lap cost goes to
     { ID: 's4', 'Пилот': 'oleg_manager', 'ID тренировки': 'T1', 'Заездов': '1' },
   ] };
   const ivan = buildView(d, { username: 'ivan_petrov' });
-  assert.deepEqual(ivan.trainings.map((t) => [t.id, t.title, t.myLaps, t.maxLaps]), [['T1', 'PitStop — Тренировка', 3, 5], ['T2', 'Вечерняя', 4, 10]]);
+  assert.deepEqual(ivan.trainings.map((t) => [t.id, t.title, t.myLaps, t.maxLaps]), [['T1', 'Школа', 3, 5], ['T2', 'Вечерняя', 4, 10]]);
   assert.deepEqual(ivan.trainings[0].going.map((g) => [g.name, g.laps, g.me]), [['Иван Петров', 3, true], ['Олег', 1, false]]);
   // Последняя запись действует, отменённая тренировка в расходы не идёт.
   const tr = ivan.finance.spent.filter((x) => x.category === 'Тренировки');
@@ -330,7 +336,7 @@ test('Apps Script: pilot signs up for a training, changes laps and cancels', () 
   assert.deepEqual(v.finance.spent.filter((x) => x.raceId === 'T1').map((x) => x.amount), [6000]);
 
   assert.equal(doGet({ initData, action: 'signTraining', trainingId: 'T1', laps: '6' }).error, 'bad_laps');
-  assert.equal(doGet({ initData, action: 'signTraining', trainingId: 'T1', laps: '0' }).error, 'bad_laps');
+  assert.equal(doGet({ initData, action: 'signTraining', trainingId: 'T1', laps: '1' }).error, 'bad_laps');
   assert.equal(doGet({ initData, action: 'signTraining', trainingId: 'T1', laps: '=1+1' }).error, 'bad_laps');
   assert.equal(doGet({ initData, action: 'signTraining', trainingId: 'T2', laps: '1' }).error, 'no_training');
   assert.equal(doGet({ initData, action: 'signTraining', trainingId: 'X', laps: '1' }).error, 'no_training');
@@ -348,4 +354,14 @@ test('Apps Script: trainings sheet is created on first open', () => {
   const doGet = loadGas('123:ABC', sheets);
   doGet({ initData: signInitData('123:ABC', { id: 42, username: 'ivan_petrov' }).toString() });
   assert.equal(sheets['Тренировки'][0][8], 'Стоимость заезда');
+});
+
+test('Apps Script: missing training columns are added to an existing sheet', () => {
+  const sheets = { ...JSON.parse(JSON.stringify(gasSheets)), 'Тренировки': [['ID', 'Дата', 'Трасса'], ['', '', '']] };
+  const doGet = loadGas('123:ABC', sheets);
+  doGet({ initData: signInitData('123:ABC', { id: 42, username: 'ivan_petrov' }).toString() });
+  const h = sheets['Тренировки'][0];
+  assert.deepEqual(h.slice(0, 3), ['ID', 'Дата', 'Трасса']);
+  assert.ok(h.includes('Тип') && h.includes('Мин. заездов') && h.includes('Макс. заездов'));
+  assert.equal(new Set(h).size, h.length);
 });

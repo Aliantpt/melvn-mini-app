@@ -16,8 +16,8 @@ const INCOME_SHEET = 'Заработок';
 const INCOME_HEADERS = ['ID', 'Дата записи', 'Менеджер', 'ID гонки', 'Сумма', 'Комментарий'];
 const INCOME_HINTS = ['Заполняется из приложения', 'Не редактировать вручную без нужды', 'Ник или ID', 'ID из «Событий»', 'Рубли', ''];
 const TRAININGS_SHEET = 'Тренировки';
-const TRAININGS_HEADERS = ['ID', 'Чемпионат', 'Название', 'Дата', 'Начало', 'Окончание', 'Трасса', 'Адрес', 'Стоимость заезда', 'Макс. заездов', 'Описание', 'Статус'];
-const TRAININGS_HINTS = ['Т1, Т2…', 'Необязательно', 'Если пусто — «Тренировка»', 'ДД.ММ.ГГГГ', 'ЧЧ:ММ', 'ЧЧ:ММ', '', '', 'Рубли за один заезд', 'Пусто — до 10', '', 'Отменена — скрыть из расходов'];
+const TRAININGS_HEADERS = ['ID', 'Тип', 'Название', 'Дата', 'Начало', 'Окончание', 'Трасса', 'Адрес', 'Стоимость заезда', 'Мин. заездов', 'Макс. заездов', 'Описание', 'Статус'];
+const TRAININGS_HINTS = ['TR1, TR2…', 'Школа / Тренировочные заезды', 'Если пусто — по типу', 'ДД.ММ.ГГГГ', 'ЧЧ:ММ', 'ЧЧ:ММ', 'Для фильтра в приложении', '', 'Рубли за один заезд', 'Пусто — 1', 'Пусто — 10', '', 'Отменено — убрать из расходов'];
 const SIGNUP_SHEET = 'Записи на тренировки';
 const SIGNUP_HEADERS = ['ID', 'Дата записи', 'Пилот', 'ID тренировки', 'Заездов'];
 const SIGNUP_HINTS = ['Заполняется из приложения', 'Не редактировать вручную без нужды', 'Ник или ID', 'ID из «Тренировок»', 'Число'];
@@ -155,6 +155,7 @@ function changeSignup(action, p, user) {
 }
 
 // Служебные листы создаются сами: строка 1 — заголовки, строка 2 — подсказки.
+// Если лист уже есть, недостающие колонки дописываются справа.
 function ensureSheet(name, headers, hints) {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   let sh = ss.getSheetByName(name);
@@ -163,7 +164,16 @@ function ensureSheet(name, headers, hints) {
     sh.appendRow(headers);
     sh.appendRow(hints);
     sh.setFrozenRows(2);
+    return sh;
   }
+  const have = (sh.getDataRange().getDisplayValues()[0] || []).map(function (h) { return String(h).trim(); });
+  let col = have.length;
+  headers.forEach(function (h, i) {
+    if (have.indexOf(h) >= 0) return;
+    col++;
+    sh.getRange(1, col).setValue(h);
+    sh.getRange(2, col).setValue(hints[i]);
+  });
   return sh;
 }
 

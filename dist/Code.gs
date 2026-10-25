@@ -20,8 +20,8 @@ const INCOME_SHEET = 'Заработок';
 const INCOME_HEADERS = ['ID', 'Дата записи', 'Менеджер', 'ID гонки', 'Сумма', 'Комментарий'];
 const INCOME_HINTS = ['Заполняется из приложения', 'Не редактировать вручную без нужды', 'Ник или ID', 'ID из «Событий»', 'Рубли', ''];
 const TRAININGS_SHEET = 'Тренировки';
-const TRAININGS_HEADERS = ['ID', 'Чемпионат', 'Название', 'Дата', 'Начало', 'Окончание', 'Трасса', 'Адрес', 'Стоимость заезда', 'Макс. заездов', 'Описание', 'Статус'];
-const TRAININGS_HINTS = ['Т1, Т2…', 'Необязательно', 'Если пусто — «Тренировка»', 'ДД.ММ.ГГГГ', 'ЧЧ:ММ', 'ЧЧ:ММ', '', '', 'Рубли за один заезд', 'Пусто — до 10', '', 'Отменена — скрыть из расходов'];
+const TRAININGS_HEADERS = ['ID', 'Тип', 'Название', 'Дата', 'Начало', 'Окончание', 'Трасса', 'Адрес', 'Стоимость заезда', 'Мин. заездов', 'Макс. заездов', 'Описание', 'Статус'];
+const TRAININGS_HINTS = ['TR1, TR2…', 'Школа / Тренировочные заезды', 'Если пусто — по типу', 'ДД.ММ.ГГГГ', 'ЧЧ:ММ', 'ЧЧ:ММ', 'Для фильтра в приложении', '', 'Рубли за один заезд', 'Пусто — 1', 'Пусто — 10', '', 'Отменено — убрать из расходов'];
 const SIGNUP_SHEET = 'Записи на тренировки';
 const SIGNUP_HEADERS = ['ID', 'Дата записи', 'Пилот', 'ID тренировки', 'Заездов'];
 const SIGNUP_HINTS = ['Заполняется из приложения', 'Не редактировать вручную без нужды', 'Ник или ID', 'ID из «Тренировок»', 'Число'];
@@ -159,6 +159,7 @@ function changeSignup(action, p, user) {
 }
 
 // Служебные листы создаются сами: строка 1 — заголовки, строка 2 — подсказки.
+// Если лист уже есть, недостающие колонки дописываются справа.
 function ensureSheet(name, headers, hints) {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   let sh = ss.getSheetByName(name);
@@ -167,7 +168,16 @@ function ensureSheet(name, headers, hints) {
     sh.appendRow(headers);
     sh.appendRow(hints);
     sh.setFrozenRows(2);
+    return sh;
   }
+  const have = (sh.getDataRange().getDisplayValues()[0] || []).map(function (h) { return String(h).trim(); });
+  let col = have.length;
+  headers.forEach(function (h, i) {
+    if (have.indexOf(h) >= 0) return;
+    col++;
+    sh.getRange(1, col).setValue(h);
+    sh.getRange(2, col).setValue(hints[i]);
+  });
   return sh;
 }
 
@@ -503,18 +513,22 @@ const MAX_LAPS_LIMIT = 30;
 function buildTrainings(rows) {
   const out = [];
   const seen = new Set();
+  const int = (v) => parseInt(String(v ?? '').trim(), 10);
   for (const r of rows || []) {
     const id = String(r['ID'] || '').trim();
     const date = parseDate(r['Дата']);
     if (!id || !date || seen.has(id)) continue;
     seen.add(id);
-    const championship = String(r['Чемпионат'] || '').trim();
-    const max = parseInt(String(r['Макс. заездов'] || '').trim(), 10);
+    const kind = String(r['Тип'] || '').trim();
+    const max = int(r['Макс. заездов']);
+    const maxLaps = max > 0 ? Math.min(max, MAX_LAPS_LIMIT) : DEFAULT_MAX_LAPS;
+    const min = int(r['Мин. заездов']);
     out.push({
       id,
       type: 'Тренировка',
-      championship,
-      title: String(r['Название'] || '').trim() || [championship, 'Тренировка'].filter(Boolean).join(' — '),
+      kind,
+      championship: String(r['Чемпионат'] || '').trim(),
+      title: String(r['Название'] || '').trim() || kind || 'Тренировка',
       date,
       start: parseTime(r['Начало']),
       end: parseTime(r['Окончание']),
@@ -522,7 +536,8 @@ function buildTrainings(rows) {
       address: String(r['Адрес'] || '').trim(),
       lapCostText: String(r['Стоимость заезда'] || '').trim(),
       lapCost: parseMoney(r['Стоимость заезда']),
-      maxLaps: max > 0 ? Math.min(max, MAX_LAPS_LIMIT) : DEFAULT_MAX_LAPS,
+      minLaps: min > 0 ? Math.min(min, maxLaps) : 1,
+      maxLaps,
       description: String(r['Описание'] || '').trim(),
       cancelled: String(r['Статус'] || '').trim().toLowerCase().startsWith('отмен'),
     });
@@ -543,11 +558,11 @@ function buildSignups(rows) {
   return [...map.values()];
 }
 
-// Проверка записи: тренировка есть, не отменена, заездов от 1 до максимума.
+// Проверка записи: тренировка есть, не отменена, заездов от минимума до максимума.
 function canSignTraining(trainings, trainingId, laps) {
   const t = trainings.find((x) => x.id === trainingId);
   if (!t || t.cancelled) return 'no_training';
-  if (!/^\d+$/.test(String(laps).trim()) || +laps < 1 || +laps > t.maxLaps) return 'bad_laps';
+  if (!/^\d+$/.test(String(laps).trim()) || +laps < t.minLaps || +laps > t.maxLaps) return 'bad_laps';
   return '';
 }
 
@@ -640,6 +655,7 @@ function buildView(data, tgUser, timezone) {
       const mine = going.find((s) => person.keys.includes(s.pilot));
       const calEvent = {
         ...t,
+        type: t.kind || t.type,
         stageLabel: '',
         format: '',
         cost: t.lapCostText ? `${t.lapCostText} за заезд` + (mine ? `, ${mine.laps} ${lapsWord(mine.laps)}` : '') : '',
@@ -649,6 +665,7 @@ function buildView(data, tgUser, timezone) {
       return {
         id: t.id,
         title: t.title,
+        kind: t.kind,
         championship: t.championship,
         date: isoDate(t.date),
         start: t.start ? `${pad(t.start.h)}:${pad(t.start.min)}` : '',
@@ -657,6 +674,7 @@ function buildView(data, tgUser, timezone) {
         address: t.address,
         lapCost: t.lapCost,
         lapCostText: t.lapCostText,
+        minLaps: t.minLaps,
         maxLaps: t.maxLaps,
         description: t.description,
         cancelled: t.cancelled,

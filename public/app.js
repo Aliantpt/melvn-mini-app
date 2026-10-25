@@ -13,6 +13,11 @@
   let trTab = 'upcoming'; // вкладка «Тренировки»: предстоящие или прошедшие
   let trPick = null; // открытый выбор заездов {id, laps}
   let trDetail = null; // открытая карточка тренировки
+  // Фильтры тренировок: трасса и тип; пусто — все. Запоминаются на устройстве.
+  let trFilter = { track: '', kind: '' };
+  try {
+    trFilter = { ...trFilter, ...JSON.parse(localStorage.getItem('tr_filter') || '{}') };
+  } catch (e) {}
   // Выбранные чемпионаты; пустой список — показывать все.
   let champFilter = [];
   const NO_CHAMP = '__none__';
@@ -496,11 +501,11 @@
     const past = t.date < today();
     if (trPick && trPick.id === t.id) {
       const n = trPick.laps;
-      const laps = Array.from({ length: t.maxLaps }, (_, i) => i + 1)
+      const laps = Array.from({ length: t.maxLaps - t.minLaps + 1 }, (_, i) => t.minLaps + i)
         .map((i) => `<button class="lap ${i === n ? 'on' : ''}" data-lap="${i}">${i}</button>`)
         .join('');
       return `<div class="tr-pick">
-        <div class="small">Сколько заездов?</div>
+        <div class="small">Сколько заездов?${t.minLaps > 1 ? ` Минимум ${t.minLaps}.` : ''}</div>
         <div class="laps">${laps}</div>
         ${n && t.lapCost ? `<div class="tr-sum">${n} × ${money(t.lapCost)} = <b>${money(n * t.lapCost)}</b></div>` : ''}
         <div class="tr-actions">
@@ -524,17 +529,23 @@
     return `<button class="tr-btn wide" data-pick="${esc(t.id)}">${past ? 'Отметить, что ездил' : 'Поеду'}</button>`;
   }
 
+  function trainingBadges(t) {
+    if (t.cancelled) return '<span class="badges"><span class="badge off">Отменено</span></span>';
+    const kind = t.kind && t.kind !== t.title ? `<span class="badge">${esc(t.kind)}</span>` : '';
+    const mine = t.myLaps ? '<span class="badge role">Пилот</span>' : '';
+    return kind || mine ? `<span class="badges">${kind}${mine}</span>` : '';
+  }
+
   function trainingCard(t) {
     const meta = [fmtDate(t.date), fmtTime(t), t.track].filter(Boolean).map(esc).join(' · ');
     const price = lapPrice(t) ? `${esc(lapPrice(t))} за заезд` : '';
     const going = t.going.length ? `едут: ${t.going.length}` : '';
     return `<div class="card tr-card ${t.cancelled ? 'cancelled' : ''} ${t.myLaps ? 'mine' : ''}">
       <button class="tr-open" data-training="${esc(t.id)}">
-        ${t.championship && !t.title.startsWith(t.championship) ? `<div class="champ">${esc(t.championship)}</div>` : ''}
         <div class="title">${esc(t.title)}</div>
         <div class="meta">${meta}</div>
         <div class="meta">${[price, going].filter(Boolean).join(' · ')}</div>
-        ${t.cancelled ? '<span class="badges"><span class="badge off">Отменено</span></span>' : ''}
+        ${trainingBadges(t)}
       </button>
       ${trainingControls(t)}
     </div>`;
@@ -544,10 +555,26 @@
     const all = view.trainings;
     if (!all) return '<div class="state">Обновите скрипт в таблице, чтобы увидеть тренировки.</div>';
     const t = today();
-    const upcoming = all.filter((x) => x.date >= t);
-    const past = all.filter((x) => x.date < t).reverse();
+    const chipRow = (key, values, allLabel) => {
+      if (values.length < 2) return '';
+      const cur = values.includes(trFilter[key]) ? trFilter[key] : '';
+      return `<div class="chips">
+        <button class="chip ${cur ? '' : 'on'}" data-trf="${key}" data-val="">${allLabel}</button>
+        ${values.map((v) => `<button class="chip ${cur === v ? 'on' : ''}" data-trf="${key}" data-val="${esc(v)}">${esc(v)}</button>`).join('')}
+      </div>`;
+    };
+    const uniq = (f) => [...new Set(all.map(f).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'ru'));
+    const tracks = uniq((x) => x.track);
+    const kinds = uniq((x) => x.kind);
+    const shown = all.filter(
+      (x) => (!tracks.includes(trFilter.track) || x.track === trFilter.track) && (!kinds.includes(trFilter.kind) || x.kind === trFilter.kind),
+    );
+    const upcoming = shown.filter((x) => x.date >= t);
+    const past = shown.filter((x) => x.date < t).reverse();
     const list = trTab === 'upcoming' ? upcoming : past;
     return `
+      ${chipRow('kind', kinds, 'Все типы')}
+      ${chipRow('track', tracks, 'Все трассы')}
       <div class="tabs">
         <button class="tab ${trTab === 'upcoming' ? 'on' : ''}" data-trtab="upcoming">Предстоящие (${upcoming.length})</button>
         <button class="tab ${trTab === 'past' ? 'on' : ''}" data-trtab="past">Прошедшие (${past.length})</button>
@@ -589,6 +616,16 @@
     app.querySelectorAll('[data-trtab]').forEach((b) =>
       b.addEventListener('click', () => {
         trTab = b.dataset.trtab;
+        trPick = null;
+        renderList();
+      }),
+    );
+    app.querySelectorAll('[data-trf]').forEach((b) =>
+      b.addEventListener('click', () => {
+        trFilter[b.dataset.trf] = b.dataset.val;
+        try {
+          localStorage.setItem('tr_filter', JSON.stringify(trFilter));
+        } catch (e) {}
         trPick = null;
         renderList();
       }),
@@ -653,10 +690,9 @@
     app.innerHTML = `
       ${tg ? '' : '<button class="back">‹ Назад</button>'}
       <div class="section">
-        ${t.championship && !t.title.startsWith(t.championship) ? `<div class="champ">${esc(t.championship)}</div>` : ''}
         <div class="title" style="font-weight:700;font-size:19px">${esc(t.title)}</div>
         <div class="meta small" style="margin-top:4px">${esc(fmtDate(t.date))}${t.start ? ' · ' + esc(fmtTime(t)) : ''}</div>
-        <span class="badges">${t.cancelled ? '<span class="badge off">Отменено</span>' : '<span class="badge">Тренировка</span>'}${t.myLaps ? '<span class="badge role">Пилот</span>' : ''}</span>
+        ${trainingBadges(t)}
         ${trainingControls(t)}
       </div>
       <div class="section">
@@ -664,7 +700,8 @@
         ${kv('Трасса', esc(t.track))}
         ${kv('Адрес', t.address ? `<a href="https://yandex.ru/maps/?text=${encodeURIComponent(t.address)}" data-ext>${esc(t.address)}</a>` : '')}
         ${kv('Стоимость заезда', esc(lapPrice(t)))}
-        ${kv('Максимум заездов', String(t.maxLaps))}
+        ${kv('Тип', esc(t.kind))}
+        ${kv('Заездов', t.minLaps === t.maxLaps ? String(t.maxLaps) : `от ${t.minLaps} до ${t.maxLaps}`)}
       </div>
       ${t.description ? `<div class="section"><h3>Описание</h3><div class="desc">${esc(t.description)}</div></div>` : ''}
       <div class="section"><h3>Едут (${t.going.length})</h3>${going}</div>
