@@ -368,9 +368,35 @@ export function buildTrainingSpent(trainings, signups, person) {
   return items;
 }
 
+// ---- Архив ----
+// Строки старше недели скрипт переносит на листы-архивы, чтобы основные листы
+// не разрастались. Приложение читает оба листа; при совпадении ID главнее основной.
+export const ARCHIVE_AFTER_DAYS = 7;
+
+function withArchive(main, archived) {
+  const ids = new Set(main.map((e) => e.id));
+  return [...main, ...archived.filter((e) => !ids.has(e.id))];
+}
+
+export function eventsWithArchive(data) {
+  return withArchive(buildEvents(data['События']), buildEvents(data['Архив событий']));
+}
+
+export function trainingsWithArchive(data) {
+  return withArchive(buildTrainings(data['Тренировки']), buildTrainings(data['Архив тренировок']));
+}
+
+// ID событий, прошедших больше `days` дней назад (todayIso — «ГГГГ-ММ-ДД»).
+export function staleIds(items, todayIso, days) {
+  const [y, m, d] = todayIso.split('-').map(Number);
+  const c = new Date(Date.UTC(y, m - 1, d - days));
+  const cutoff = isoDate({ y: c.getUTCFullYear(), m: c.getUTCMonth() + 1, d: c.getUTCDate() });
+  return new Set(items.filter((e) => isoDate(e.date) < cutoff).map((e) => e.id));
+}
+
 // Сборка ответа для экрана приложения.
 export function buildView(data, tgUser, timezone) {
-  const allEvents = buildEvents(data['События']);
+  const allEvents = eventsWithArchive(data);
   const people = buildPeople(data['Люди']);
   const person = findPerson(people, tgUser);
   if (!person || !person.active) {
@@ -422,7 +448,7 @@ export function buildView(data, tgUser, timezone) {
     .sort(byWhen);
 
   // Открытые тренировки видят все, у кого есть доступ.
-  const trainings = buildTrainings(data['Тренировки']);
+  const trainings = trainingsWithArchive(data);
   const signups = buildSignups(data['Записи на тренировки']);
   const openTrainings = trainings
     .map((t) => {

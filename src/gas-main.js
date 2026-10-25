@@ -11,7 +11,7 @@ function botToken() {
 }
 
 const TIMEZONE = 'Europe/Moscow';
-const SHEETS = ['Люди', 'События', 'Заработок', 'Тренировки', 'Записи на тренировки'];
+const SHEETS = ['Люди', 'События', 'Заработок', 'Тренировки', 'Записи на тренировки', 'Архив событий', 'Архив тренировок'];
 const INCOME_SHEET = 'Заработок';
 const INCOME_HEADERS = ['ID', 'Дата записи', 'Менеджер', 'ID гонки', 'Сумма', 'Комментарий'];
 const INCOME_HINTS = ['Заполняется из приложения', 'Не редактировать вручную без нужды', 'Ник или ID', 'ID из «Событий»', 'Рубли', ''];
@@ -33,6 +33,12 @@ function doGet(e) {
   try {
     // Лист «Тренировки» появляется сам при первом открытии приложения после обновления скрипта.
     ensureSheet(TRAININGS_SHEET, TRAININGS_HEADERS, TRAININGS_HINTS);
+    try {
+      archiveOld();
+    } catch (err) {
+      // Уборка не должна мешать открыть приложение.
+      console.error(err);
+    }
     const action = e.parameter.action || '';
     if (action === 'addIncome' || action === 'deleteIncome') {
       const result = changeIncome(action, e.parameter, user);
@@ -85,7 +91,7 @@ function changeIncome(action, p, user) {
       const raceId = String(p.raceId || '').trim();
       const amount = /^\s*-/.test(String(p.amount || '')) ? 0 : parseMoney(p.amount);
       if (!(amount > 0 && amount <= MAX_INCOME)) return { error: 'bad_amount' };
-      if (!canAddIncome(buildEvents(data['События']), person, raceId)) return { error: 'not_manager' };
+      if (!canAddIncome(eventsWithArchive(data), person, raceId)) return { error: 'not_manager' };
       const note = safeCell(String(p.note || '').slice(0, 200));
       sh.appendRow([Utilities.getUuid(), new Date().toISOString(), safeCell(person.key), safeCell(raceId), amount, note]);
       return null;
@@ -134,7 +140,7 @@ function changeSignup(action, p, user) {
     if (!person || !person.active) return { error: 'no_access' };
     const trainingId = String(p.trainingId || '').trim();
     if (action === 'signTraining') {
-      const err = canSignTraining(buildTrainings(data[TRAININGS_SHEET]), trainingId, String(p.laps || ''));
+      const err = canSignTraining(trainingsWithArchive(data), trainingId, String(p.laps || ''));
       if (err) return { error: err };
     }
     if (!allowWrite(person.key)) return { error: 'too_many' };
@@ -154,6 +160,59 @@ function changeSignup(action, p, user) {
   }
 }
 
+// Раз в день: гонки и тренировки, прошедшие больше недели назад, переезжают
+// со своих листов на «Архив событий» и «Архив тренировок».
+function archiveOld() {
+  const props = PropertiesService.getScriptProperties();
+  const day = Utilities.formatDate(new Date(), TIMEZONE, 'yyyy-MM-dd');
+  if (props.getProperty('archived_on') === day) return;
+  const lock = LockService.getScriptLock();
+  if (!lock.tryLock(5000)) return;
+  try {
+    if (props.getProperty('archived_on') === day) return;
+    moveOldRows('События', 'Архив событий', buildEvents, day);
+    moveOldRows(TRAININGS_SHEET, 'Архив тренировок', buildTrainings, day);
+    props.setProperty('archived_on', day);
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+function moveOldRows(from, to, build, day) {
+  const sh = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(from);
+  if (!sh) return;
+  // Копируется то, что видно в ячейках: так даты не зависят от формата нового листа.
+  const shown = sh.getDataRange().getDisplayValues();
+  if (shown.length < 3) return;
+  const headers = shown[0].map(function (h) { return String(h).trim(); });
+  const idCol = headers.indexOf('ID');
+  if (idCol < 0) return;
+  const rows = shown.slice(2).map(function (r) {
+    const row = {};
+    headers.forEach(function (h, i) { if (h) row[h] = String(r[i]).trim(); });
+    return row;
+  });
+  const old = staleIds(build(rows), day, ARCHIVE_AFTER_DAYS);
+  if (!old.size) return;
+
+  const moved = [];
+  for (let i = 2; i < shown.length; i++) {
+    if (old.has(String(shown[i][idCol]).trim())) moved.push(i);
+  }
+  // Сначала копия в архив (колонки сопоставляются по названию), потом удаление.
+  const arch = ensureSheet(to, headers, shown[1]);
+  const archHeaders = arch.getDataRange().getDisplayValues()[0].map(function (h) { return String(h).trim(); });
+  moved.forEach(function (i) {
+    arch.appendRow(archHeaders.map(function (h) {
+      const j = h ? headers.indexOf(h) : -1;
+      return j < 0 ? '' : safeCell(shown[i][j]);
+    }));
+  });
+  // Google не даёт удалить все незакреплённые строки — оставим одну пустую.
+  if (sh.getMaxRows() - moved.length <= sh.getFrozenRows()) sh.insertRowsAfter(sh.getMaxRows(), 1);
+  for (let k = moved.length - 1; k >= 0; k--) sh.deleteRow(moved[k] + 1);
+}
+
 // Служебные листы создаются сами: строка 1 — заголовки, строка 2 — подсказки.
 // Если лист уже есть, недостающие колонки дописываются справа.
 function ensureSheet(name, headers, hints) {
@@ -169,7 +228,7 @@ function ensureSheet(name, headers, hints) {
   const have = (sh.getDataRange().getDisplayValues()[0] || []).map(function (h) { return String(h).trim(); });
   let col = have.length;
   headers.forEach(function (h, i) {
-    if (have.indexOf(h) >= 0) return;
+    if (!h || have.indexOf(h) >= 0) return;
     col++;
     sh.getRange(1, col).setValue(h);
     sh.getRange(2, col).setValue(hints[i]);

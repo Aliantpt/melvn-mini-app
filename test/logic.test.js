@@ -174,18 +174,23 @@ test('earned: only my income rows; managers get the form with their races', () =
 });
 
 // Запуск собранного dist/Code.gs в песочнице с заглушками сервисов Google.
-function loadGas(botToken, sheets) {
+function loadGas(botToken, sheets, today = '2026-10-25') {
   const cache = {};
+  const props = {};
   const code = readFileSync(new URL('../dist/Code.gs', import.meta.url), 'utf8');
   const signed = (buf) => [...buf].map((b) => (b > 127 ? b - 256 : b));
   const unsigned = (arr) => Buffer.from(arr.map((b) => (b + 256) % 256));
   const ctx = {
     Utilities: {
       newBlob: (s) => ({ getBytes: () => signed(Buffer.from(s, 'utf8')) }),
+      formatDate: () => today,
       computeHmacSha256Signature: (value, key) => signed(createHmac('sha256', unsigned(key)).update(unsigned(value)).digest()),
     },
     PropertiesService: {
-      getScriptProperties: () => ({ getProperty: (k) => (k === 'BOT_TOKEN' ? botToken : null) }),
+      getScriptProperties: () => ({
+        getProperty: (k) => (k === 'BOT_TOKEN' ? botToken : props[k] ?? null),
+        setProperty: (k, v) => (props[k] = v),
+      }),
     },
     ContentService: {
       MimeType: { JSON: 'json' },
@@ -197,7 +202,7 @@ function loadGas(botToken, sheets) {
         insertSheet: (name) => ((sheets[name] = []), sheetApi(name)),
       }),
     },
-    LockService: { getScriptLock: () => ({ waitLock() {}, releaseLock() {} }) },
+    LockService: { getScriptLock: () => ({ waitLock() {}, tryLock: () => true, releaseLock() {} }) },
     CacheService: { getScriptCache: () => ({ get: (k) => cache[k] ?? null, put: (k, v) => (cache[k] = v) }) },
     console: { error() {} },
   };
@@ -205,7 +210,10 @@ function loadGas(botToken, sheets) {
   ctx.Utilities.getUuid = () => 'id' + ++uuid;
   function sheetApi(name) {
     return {
-      getDataRange: () => ({ getDisplayValues: () => sheets[name].map((r) => r.map(String)) }),
+      getDataRange: () => ({
+        getDisplayValues: () => sheets[name].map((r) => r.map(String)),
+        getValues: () => sheets[name].map((r) => r.slice()),
+      }),
       appendRow: (row) => sheets[name].push(row),
       deleteRow: (n) => sheets[name].splice(n - 1, 1),
       getRange: (row, col) => ({
@@ -215,6 +223,9 @@ function loadGas(botToken, sheets) {
         },
       }),
       setFrozenRows() {},
+      getFrozenRows: () => 2,
+      getMaxRows: () => sheets[name].length,
+      insertRowsAfter: (after, n) => sheets[name].push(...Array.from({ length: n }, () => [])),
     };
   }
   vm.createContext(ctx);
@@ -375,4 +386,41 @@ test('events and trainings come in calendar order, nearest first', () => {
   const v = buildView(d, { username: 'ivan_petrov' });
   assert.deepEqual(v.events.map((e) => e.id), ['D', 'A', 'B', 'C']);
   assert.deepEqual(v.trainings.map((t) => t.id), ['t1', 't2', 't3']);
+});
+
+test('Apps Script: races and trainings older than a week move to archive sheets, app still sees them', () => {
+  const sheets = {
+    ...JSON.parse(JSON.stringify(gasSheets)),
+    'Тренировки': sheetTable([
+      { ID: 'T1', 'Дата': '10.10.2026', 'Трасса': 'PitStop', 'Стоимость заезда': '1000' },
+      { ID: 'T2', 'Дата': '20.10.2026', 'Трасса': 'PitStop', 'Стоимость заезда': '1000' },
+    ]).slice(0, -1),
+    'Записи на тренировки': [['ID', 'Дата записи', 'Пилот', 'ID тренировки', 'Заездов'], ['', '', '', '', ''], ['s', '', 'ivan_petrov', 'T1', '2']],
+  };
+  // R1 (две строки-состава) 15.11.2026 — через месяц после «сегодня» уже старая.
+  const doGet = loadGas('123:ABC', sheets, '2026-12-01');
+  const initData = signInitData('123:ABC', { id: 42, username: 'ivan_petrov' }).toString();
+  const v = doGet({ initData });
+  const ids = (rows) => rows.slice(2).map((r) => r[0]).filter(Boolean);
+  assert.deepEqual(ids(sheets['События']).filter((x) => x === 'R1'), []);
+  assert.deepEqual(ids(sheets['Архив событий']).filter((x) => x === 'R1'), ['R1', 'R1']);
+  assert.deepEqual(ids(sheets['Тренировки']), []);
+  assert.deepEqual(ids(sheets['Архив тренировок']), ['T1', 'T2']);
+  assert.deepEqual(sheets['Архив событий'][0], sheets['События'][0]);
+  // В приложении всё на месте, финансы считаются.
+  assert.deepEqual(v.events.map((e) => e.id), ['R1']);
+  assert.equal(v.events[0].crews.length, 2);
+  assert.deepEqual(v.finance.spent.map((x) => [x.raceId, x.amount]), [['R1', 5000], ['T1', 2000]]);
+  // Второй раз за день ничего не делает.
+  const before = JSON.stringify(sheets);
+  doGet({ initData });
+  assert.equal(JSON.stringify(sheets), before);
+});
+
+test('Apps Script: recent races stay on the main sheet', () => {
+  const sheets = JSON.parse(JSON.stringify(gasSheets));
+  const doGet = loadGas('123:ABC', sheets, '2026-11-20');
+  doGet({ initData: signInitData('123:ABC', { id: 42, username: 'ivan_petrov' }).toString() });
+  assert.ok(sheets['События'].some((r) => r[0] === 'R1'));
+  assert.ok(!(sheets['Архив событий'] || []).some((r) => r[0] === 'R1'));
 });
