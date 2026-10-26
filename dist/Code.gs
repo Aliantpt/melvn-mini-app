@@ -37,6 +37,10 @@ const SIGNUP_HINTS = ['Заполняется из приложения', 'Не 
 const MAX_AUTH_AGE_SECONDS = 24 * 3600;
 const MAX_INCOME = 10000000;
 const MAX_WRITES_PER_HOUR = 30;
+// Готовая копия таблицы для экрана приложения хранится в кэше Google 10 минут и
+// сбрасывается при любой правке: из приложения, админ-панели или руками в таблице.
+const CACHE_SECONDS = 600;
+const CACHE_CHUNK = 40000; // в одной ячейке кэша до 100 КБ, кириллица — 2 байта на букву
 const HISTORY_SHEET = 'История действий';
 const HISTORY_HEADERS = ['Время', 'Кто', 'Telegram', 'Действие', 'Подробности'];
 const HISTORY_HINTS = ['Московское время', 'Имя с листа «Люди»', 'Ник или ID', '', 'Лист очищается сам раз в 3 дня'];
@@ -49,8 +53,6 @@ function doGet(e) {
   const user = verifyInitData(initData, botToken());
   if (!user) return jsonOut({ error: 'not_telegram' });
   try {
-    // Лист «Тренировки» появляется сам при первом открытии приложения после обновления скрипта.
-    ensureSheet(TRAININGS_SHEET, TRAININGS_HEADERS, TRAININGS_HINTS);
     try {
       archiveOld();
     } catch (err) {
@@ -70,7 +72,7 @@ function doGet(e) {
       const result = changeSignup(action, e.parameter, user);
       if (result) return jsonOut(result);
     }
-    const view = buildView(readSheets(), user, TIMEZONE);
+    const view = buildView(readSheetsCached(), user, TIMEZONE);
     if (!action) logOpen_(view, user);
     return jsonOut(view);
   } catch (err) {
@@ -78,6 +80,57 @@ function doGet(e) {
     console.error(err);
     return jsonOut({ error: 'sheet_unavailable' });
   }
+}
+
+// Данные для экрана приложения: из кэша, а если его нет — из таблицы (и кладём в кэш).
+// Для записи (заработок, тренировки, настройки) таблица читается всегда напрямую.
+function readSheetsCached() {
+  const cache = CacheService.getScriptCache();
+  const key = 'sheets:' + dataVersion_();
+  try {
+    const count = Number(cache.get(key) || 0);
+    if (count) {
+      const keys = [];
+      for (let i = 0; i < count; i++) keys.push(key + ':' + i);
+      const parts = cache.getAll(keys);
+      if (keys.every(function (k) { return typeof parts[k] === 'string'; })) {
+        return JSON.parse(keys.map(function (k) { return parts[k]; }).join(''));
+      }
+    }
+  } catch (err) {
+    console.error(err);
+  }
+  // Лист «Тренировки» появляется сам при первом открытии приложения после обновления скрипта.
+  ensureSheet(TRAININGS_SHEET, TRAININGS_HEADERS, TRAININGS_HINTS);
+  const data = readSheets();
+  try {
+    const json = JSON.stringify(data);
+    const put = {};
+    let n = 0;
+    for (let i = 0; i < json.length; i += CACHE_CHUNK) put[key + ':' + n++] = json.slice(i, i + CACHE_CHUNK);
+    put[key] = String(n);
+    cache.putAll(put, CACHE_SECONDS);
+  } catch (err) {
+    console.error(err);
+  }
+  return data;
+}
+
+// Номер версии данных: меняется при каждой правке, и старый кэш больше не используется.
+function dataVersion_() {
+  return PropertiesService.getScriptProperties().getProperty('data_version') || '0';
+}
+function dropCache() {
+  try {
+    PropertiesService.getScriptProperties().setProperty('data_version', Date.now() + '-' + Math.random().toString(36).slice(2, 8));
+  } catch (err) {
+    console.error(err);
+  }
+}
+
+// Правка руками в таблице тоже сбрасывает кэш (простой триггер Google, настраивать не нужно).
+function onEdit() {
+  dropCache();
 }
 
 // Строка 1 — заголовки, строка 2 — подсказки (пропускается), данные с 3-й строки.
@@ -119,6 +172,7 @@ function changeIncome(action, p, user) {
       const note = safeCell(String(p.note || '').slice(0, 200));
       sh.appendRow([Utilities.getUuid(), new Date().toISOString(), safeCell(person.key), safeCell(raceId), amount, note]);
       const race = eventsWithArchive(data).find(function (x) { return x.id === raceId; });
+      dropCache();
       logAction_(person, user, 'Внёс заработок', amount + ' ₽ — ' + (race ? race.title : raceId) + (p.note ? ' (' + String(p.note).slice(0, 200) + ')' : ''));
       return null;
     }
@@ -129,6 +183,7 @@ function changeIncome(action, p, user) {
     for (let i = values.length - 1; i >= 2; i--) {
       if (values[i][0] === id && person.keys.includes(normHandle(values[i][2]))) {
         sh.deleteRow(i + 1);
+        dropCache();
         logAction_(person, user, 'Удалил запись о заработке', values[i][4] + ' ₽ — гонка ' + values[i][3]);
         return null;
       }
@@ -178,6 +233,7 @@ function changeSignup(action, p, user) {
     for (let i = values.length - 1; i >= 2; i--) {
       if (String(values[i][3]).trim() === trainingId && person.keys.includes(normHandle(values[i][2]))) sh.deleteRow(i + 1);
     }
+    dropCache();
     const training = trainingsWithArchive(data).find(function (x) { return x.id === trainingId; });
     const title = training ? training.title + ', ' + Utilities.formatDate(new Date(Date.UTC(training.date.y, training.date.m - 1, training.date.d, 12)), TIMEZONE, 'dd.MM.yyyy') : trainingId;
     if (action === 'signTraining') {
@@ -219,6 +275,7 @@ function saveSettings(p, user) {
       "'" + trainingsLead.text,
       new Date().toISOString(),
     ]);
+    dropCache();
     logAction_(person, user, 'Изменил напоминания',
       'гонки: ' + (p.racesOn === '1' ? 'за ' + racesLead.text : 'выкл') + '; тренировки: ' + (p.trainingsOn === '1' ? 'за ' + trainingsLead.text : 'выкл'));
     return null;
@@ -234,7 +291,8 @@ function sendReminders() {
   const lock = LockService.getScriptLock();
   if (!lock.tryLock(5000)) return;
   try {
-    const data = readSheets();
+    // Через кэш: заодно таймер каждые 5 минут держит кэш тёплым для приложения.
+    const data = readSheetsCached();
     const log = ensureSheet(LOG_SHEET, ['Ключ', 'Отправлено'], ['Служебный лист: какие напоминания уже отправлены', '']);
     const logged = log.getDataRange().getDisplayValues();
     const sent = new Set(logged.slice(2).map(function (r) { return r[0]; }));
@@ -341,6 +399,7 @@ function moveOldRows(from, to, build, day) {
   // Google не даёт удалить все незакреплённые строки — оставим одну пустую.
   if (sh.getMaxRows() - moved.length <= sh.getFrozenRows()) sh.insertRowsAfter(sh.getMaxRows(), 1);
   for (let k = moved.length - 1; k >= 0; k--) sh.deleteRow(moved[k] + 1);
+  dropCache();
   logAction_(null, null, 'Перенёс в архив', from + ' → ' + to + ': ' + Array.from(old).join(', '));
 }
 
@@ -403,7 +462,9 @@ function ensureSheet(name, headers, hints) {
     sh.setFrozenRows(2);
     return sh;
   }
-  const have = (sh.getDataRange().getDisplayValues()[0] || []).map(function (h) { return String(h).trim(); });
+  // Читаем только строку заголовков, а не весь лист.
+  const width = Math.max(1, sh.getLastColumn());
+  const have = sh.getRange(1, 1, 1, width).getDisplayValues()[0].map(function (h) { return String(h).trim(); });
   let col = have.length;
   headers.forEach(function (h, i) {
     if (!h || have.indexOf(h) >= 0) return;
@@ -555,6 +616,7 @@ function admin_replace(sheetName, oldRows, newRows) {
     const extra = positions.slice(n).sort(function (a, b) { return b - a; });
     if (extra.length && sh.getMaxRows() - extra.length <= sh.getFrozenRows()) sh.insertRowsAfter(sh.getMaxRows(), 1);
     extra.forEach(function (r) { sh.deleteRow(r); });
+    dropCache();
     logAdminChange_(sheetName, headers, oldRows, newRows);
   } finally {
     lock.releaseLock();
