@@ -363,7 +363,7 @@
   }
 
   function toolbar(addLabel, extra) {
-    return '<div class="bar"><input class="input search" id="q" placeholder="Поиск" value="' + esc(ui.q) + '">' + (extra || '') + (addLabel ? '<button class="btn" id="add">+ ' + esc(addLabel) + '</button>' : '') + '</div>';
+    return '<div class="bar"><input class="input search" id="q" placeholder="Поиск по названию" value="' + esc(ui.q) + '">' + (extra || '') + (addLabel ? '<button class="btn" id="add">+ ' + esc(addLabel) + '</button>' : '') + '</div>';
   }
   function bindToolbar() {
     const q = $('#q');
@@ -386,7 +386,8 @@
     $$('[data-training]').forEach((b) => (b.onclick = () => editTraining(b.dataset.training)));
     $$('[data-person]').forEach((b) => (b.onclick = () => editPerson(Number(b.dataset.person))));
   }
-  const match = (text) => !ui.q || text.toLowerCase().indexOf(ui.q.trim().toLowerCase()) >= 0;
+  const fold = (x) => String(x || '').toLowerCase().replace(/ё/g, 'е');
+  const match = (text) => !ui.q.trim() || fold(text).indexOf(fold(ui.q.trim())) >= 0;
   const whenSeg = () => '<div class="seg">' + [['upcoming', 'Предстоящие'], ['past', 'Прошедшие'], ['all', 'Все']].map((w) => '<button class="' + (ui.when === w[0] ? 'on' : '') + '" data-when="' + w[0] + '">' + w[1] + '</button>').join('') + '</div>';
   function byWhen(list) {
     const t = today();

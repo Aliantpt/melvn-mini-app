@@ -209,3 +209,5 @@ main { padding: 12px 16px 32px; }
 .set-warn { color: var(--orange); margin-top: 6px; }
 .cal:disabled { opacity: .5; }
 .set-sub { font-size: 13px; color: var(--hint); font-weight: 600; text-transform: uppercase; letter-spacing: .03em; margin: 16px 2px 4px; }
+.search { display: block; width: 100%; margin-bottom: 10px; border: 1px solid var(--line); background: var(--bg); color: var(--text); font: inherit; padding: 10px 12px; border-radius: 12px; -webkit-appearance: none; appearance: none; }
+.search:focus { outline: none; border-color: var(--orange); }

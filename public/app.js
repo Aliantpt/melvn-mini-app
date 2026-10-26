@@ -11,6 +11,7 @@
   let finCursor = null; // месяц во вкладке «Финансы»
   let finAll = false; // «Всё время» вместо месяца
   let trTab = 'upcoming'; // вкладка «Тренировки»: предстоящие или прошедшие
+  const search = { list: '', trainings: '' }; // поиск по названию во вкладках
   let trPick = null; // открытый выбор заездов {id, laps}
   let trDetail = null; // открытая карточка тренировки
   // Фильтры тренировок: трасса и тип; пусто — все. Запоминаются на устройстве.
@@ -186,7 +187,14 @@
   const when = (e) => e.date + ' ' + (e.start || '');
   const byWhen = (a, b) => (when(a) < when(b) ? -1 : when(a) > when(b) ? 1 : 0);
 
+  // Поиск по названию: без учёта регистра, ё = е.
+  const fold = (x) => String(x || '').toLowerCase().replace(/ё/g, 'е');
+  const found = (q, ...texts) => !q.trim() || fold(texts.join(' ')).includes(fold(q.trim()));
+  const searchBox = (key) =>
+    `<input class="search" type="search" data-search="${key}" placeholder="Поиск по названию" value="${esc(search[key])}" autocomplete="off">`;
+
   function listBody(shown) {
+    shown = shown.filter((e) => found(search.list, e.title, e.championship, e.stage));
     const t = today();
     const upcoming = shown.filter((e) => e.date >= t).sort(byWhen);
     const past = shown.filter((e) => e.date < t).sort(byWhen).reverse();
@@ -196,7 +204,7 @@
         <button class="tab ${tab === 'upcoming' ? 'on' : ''}" data-tab="upcoming">Предстоящие (${upcoming.length})</button>
         <button class="tab ${tab === 'past' ? 'on' : ''}" data-tab="past">Прошедшие (${past.length})</button>
       </div>
-      ${list.map(cardHtml).join('') || `<div class="state">${tab === 'upcoming' ? 'Пока нет запланированных событий.' : 'Прошедших событий нет.'}</div>`}
+      ${list.map(cardHtml).join('') || `<div class="state">${search.list.trim() ? 'Ничего не найдено.' : tab === 'upcoming' ? 'Пока нет запланированных событий.' : 'Прошедших событий нет.'}</div>`}
     `;
   }
 
@@ -583,19 +591,23 @@
     const tracks = uniq((x) => x.track);
     const kinds = uniq((x) => x.kind);
     const shown = all.filter(
-      (x) => (!tracks.includes(trFilter.track) || x.track === trFilter.track) && (!kinds.includes(trFilter.kind) || x.kind === trFilter.kind),
+      (x) =>
+        (!tracks.includes(trFilter.track) || x.track === trFilter.track) &&
+        (!kinds.includes(trFilter.kind) || x.kind === trFilter.kind) &&
+        found(search.trainings, x.title, x.kind),
     );
     const upcoming = shown.filter((x) => x.date >= t).sort(byWhen);
     const past = shown.filter((x) => x.date < t).sort(byWhen).reverse();
     const list = trTab === 'upcoming' ? upcoming : past;
     return `
+      ${searchBox('trainings')}
       ${chipRow('kind', kinds, 'Все типы')}
       ${chipRow('track', tracks, 'Все трассы')}
       <div class="tabs">
         <button class="tab ${trTab === 'upcoming' ? 'on' : ''}" data-trtab="upcoming">Предстоящие (${upcoming.length})</button>
         <button class="tab ${trTab === 'past' ? 'on' : ''}" data-trtab="past">Прошедшие (${past.length})</button>
       </div>
-      ${list.map(trainingCard).join('') || `<div class="state">${trTab === 'upcoming' ? 'Открытых тренировок пока нет.' : 'Прошедших тренировок нет.'}</div>`}
+      ${list.map(trainingCard).join('') || `<div class="state">${search.trainings.trim() ? 'Ничего не найдено.' : trTab === 'upcoming' ? 'Открытых тренировок пока нет.' : 'Прошедших тренировок нет.'}</div>`}
       <div class="small" style="text-align:center;margin-top:6px">Отмеченные заезды попадают в «Финансы»: стоимость заезда × число заездов.</div>
     `;
   }
@@ -955,7 +967,7 @@
         <button class="nav-btn ${mainView === 'trainings' ? 'on' : ''}" data-view="trainings">Тренировки</button>
         <button class="nav-btn ${mainView === 'finance' ? 'on' : ''}" data-view="finance">Финансы</button>
       </div>
-      ${mainView === 'finance' ? financeBody() : mainView === 'trainings' ? trainingsBody() : chips + (mainView === 'calendar' ? calendarBody(shown) : listBody(shown))}
+      ${mainView === 'finance' ? financeBody() : mainView === 'trainings' ? trainingsBody() : (mainView === 'calendar' ? chips + calendarBody(shown) : searchBox('list') + chips + listBody(shown))}
     `;
     app.querySelectorAll('[data-view]').forEach((b) =>
       b.addEventListener('click', () => {
@@ -1004,6 +1016,17 @@
     );
     if (mainView === 'finance') bindFinance();
     if (mainView === 'trainings') bindTrainings();
+    const box = app.querySelector('[data-search]');
+    if (box)
+      box.addEventListener('input', () => {
+        search[box.dataset.search] = box.value;
+        const pos = box.selectionStart;
+        trPick = null;
+        renderList();
+        const again = app.querySelector('[data-search]');
+        again.focus();
+        again.setSelectionRange(pos, pos);
+      });
   }
 
   const FORMAT = { team: 'Командная', solo: 'Личная' };
