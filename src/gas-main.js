@@ -33,6 +33,10 @@ const SIGNUP_HINTS = ['Заполняется из приложения', 'Не 
 const MAX_AUTH_AGE_SECONDS = 24 * 3600;
 const MAX_INCOME = 10000000;
 const MAX_WRITES_PER_HOUR = 30;
+const HISTORY_SHEET = 'История действий';
+const HISTORY_HEADERS = ['Время', 'Кто', 'Telegram', 'Действие', 'Подробности'];
+const HISTORY_HINTS = ['Московское время', 'Имя с листа «Люди»', 'Ник или ID', '', 'Лист очищается сам раз в 3 дня'];
+const HISTORY_KEEP_DAYS = 3;
 
 function doGet(e) {
   const initData = (e && e.parameter && e.parameter.initData) || '';
@@ -62,7 +66,9 @@ function doGet(e) {
       const result = changeSignup(action, e.parameter, user);
       if (result) return jsonOut(result);
     }
-    return jsonOut(buildView(readSheets(), user, TIMEZONE));
+    const view = buildView(readSheets(), user, TIMEZONE);
+    if (!action) logOpen_(view, user);
+    return jsonOut(view);
   } catch (err) {
     // Подробности ошибки — только в журнал скрипта, наружу не отдаём.
     console.error(err);
@@ -108,6 +114,8 @@ function changeIncome(action, p, user) {
       if (!canAddIncome(eventsWithArchive(data), person, raceId)) return { error: 'not_manager' };
       const note = safeCell(String(p.note || '').slice(0, 200));
       sh.appendRow([Utilities.getUuid(), new Date().toISOString(), safeCell(person.key), safeCell(raceId), amount, note]);
+      const race = eventsWithArchive(data).find(function (x) { return x.id === raceId; });
+      logAction_(person, user, 'Внёс заработок', amount + ' ₽ — ' + (race ? race.title : raceId) + (p.note ? ' (' + String(p.note).slice(0, 200) + ')' : ''));
       return null;
     }
 
@@ -117,6 +125,7 @@ function changeIncome(action, p, user) {
     for (let i = values.length - 1; i >= 2; i--) {
       if (values[i][0] === id && person.keys.includes(normHandle(values[i][2]))) {
         sh.deleteRow(i + 1);
+        logAction_(person, user, 'Удалил запись о заработке', values[i][4] + ' ₽ — гонка ' + values[i][3]);
         return null;
       }
     }
@@ -165,8 +174,13 @@ function changeSignup(action, p, user) {
     for (let i = values.length - 1; i >= 2; i--) {
       if (String(values[i][3]).trim() === trainingId && person.keys.includes(normHandle(values[i][2]))) sh.deleteRow(i + 1);
     }
+    const training = trainingsWithArchive(data).find(function (x) { return x.id === trainingId; });
+    const title = training ? training.title + ', ' + Utilities.formatDate(new Date(Date.UTC(training.date.y, training.date.m - 1, training.date.d, 12)), TIMEZONE, 'dd.MM.yyyy') : trainingId;
     if (action === 'signTraining') {
       sh.appendRow([Utilities.getUuid(), new Date().toISOString(), safeCell(person.key), safeCell(trainingId), Number(p.laps)]);
+      logAction_(person, user, 'Записался на тренировку', title + ' — заездов: ' + Number(p.laps));
+    } else {
+      logAction_(person, user, 'Отменил запись на тренировку', title);
     }
     return null;
   } finally {
@@ -201,6 +215,8 @@ function saveSettings(p, user) {
       "'" + trainingsLead.text,
       new Date().toISOString(),
     ]);
+    logAction_(person, user, 'Изменил напоминания',
+      'гонки: ' + (p.racesOn === '1' ? 'за ' + racesLead.text : 'выкл') + '; тренировки: ' + (p.trainingsOn === '1' ? 'за ' + trainingsLead.text : 'выкл'));
     return null;
   } finally {
     lock.releaseLock();
@@ -250,6 +266,7 @@ function sendReminders() {
         if (code === 429) break;
       }
     }
+    if (due.length) logAction_(null, null, 'Бот отправил напоминания', 'Сообщений: ' + due.length);
     // Журнал не растёт бесконечно: старые записи удаляются.
     if (logged.length > 3000) log.deleteRows(3, logged.length - 2000);
   } finally {
@@ -320,6 +337,54 @@ function moveOldRows(from, to, build, day) {
   // Google не даёт удалить все незакреплённые строки — оставим одну пустую.
   if (sh.getMaxRows() - moved.length <= sh.getFrozenRows()) sh.insertRowsAfter(sh.getMaxRows(), 1);
   for (let k = moved.length - 1; k >= 0; k--) sh.deleteRow(moved[k] + 1);
+  logAction_(null, null, 'Перенёс в архив', from + ' → ' + to + ': ' + Array.from(old).join(', '));
+}
+
+// ---- История действий ----
+// Каждое действие — строка на листе «История действий». Раз в 3 дня лист очищается целиком.
+// Ошибка записи в историю не должна мешать самому действию.
+function logAction_(person, user, action, details) {
+  try {
+    const sh = ensureSheet(HISTORY_SHEET, HISTORY_HEADERS, HISTORY_HINTS);
+    clearHistoryIfDue_(sh);
+    const who = person ? person.name : user ? 'Не из команды' : 'Скрипт';
+    const tg = user ? user.label || (user.username ? '@' + user.username : 'ID ' + user.id) : '';
+    sh.appendRow([
+      "'" + Utilities.formatDate(new Date(), TIMEZONE, 'dd.MM.yyyy HH:mm:ss'),
+      safeCell(who),
+      safeCell(tg),
+      safeCell(action),
+      safeCell(String(details || '').slice(0, 500)),
+    ]);
+  } catch (err) {
+    console.error(err);
+  }
+}
+
+// Открытие приложения пишем не чаще раза в 10 минут на человека, чтобы не засорять историю.
+function logOpen_(view, user) {
+  const cache = CacheService.getScriptCache();
+  const k = 'open:' + user.id;
+  if (cache.get(k)) return;
+  cache.put(k, '1', 600);
+  if (view.access) logAction_({ name: view.me.name }, user, 'Открыл приложение', '');
+  else logAction_(null, user, 'Попытка входа без доступа', 'Нет на листе «Люди» или «Активен» = Нет');
+}
+
+function clearHistoryIfDue_(sh) {
+  const props = PropertiesService.getScriptProperties();
+  const now = Date.now();
+  const last = Number(props.getProperty('history_cleared_at') || 0);
+  if (!last) {
+    props.setProperty('history_cleared_at', String(now));
+    return;
+  }
+  if (now - last < HISTORY_KEEP_DAYS * 24 * 3600 * 1000) return;
+  props.setProperty('history_cleared_at', String(now));
+  const rows = sh.getDataRange().getDisplayValues().length;
+  if (rows <= 2) return;
+  if (sh.getMaxRows() - (rows - 2) <= sh.getFrozenRows()) sh.insertRowsAfter(sh.getMaxRows(), 1);
+  sh.deleteRows(3, rows - 2);
 }
 
 // Служебные листы создаются сами: строка 1 — заголовки, строка 2 — подсказки.

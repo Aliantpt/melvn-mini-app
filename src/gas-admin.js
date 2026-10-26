@@ -5,7 +5,7 @@
 
 const ADMIN_SHEETS = [
   'Люди', 'События', 'Чемпионаты', 'Тренировки', 'Записи на тренировки', 'Заработок',
-  'Архив событий', 'Архив тренировок',
+  'Архив событий', 'Архив тренировок', 'История действий',
 ];
 // Листы, которые можно менять из панели. Архивы только для просмотра.
 const ADMIN_WRITABLE = ['Люди', 'События', 'Чемпионаты', 'Тренировки', 'Записи на тренировки', 'Заработок'];
@@ -92,10 +92,52 @@ function admin_replace(sheetName, oldRows, newRows) {
     const extra = positions.slice(n).sort(function (a, b) { return b - a; });
     if (extra.length && sh.getMaxRows() - extra.length <= sh.getFrozenRows()) sh.insertRowsAfter(sh.getMaxRows(), 1);
     extra.forEach(function (r) { sh.deleteRow(r); });
+    logAdminChange_(sheetName, headers, oldRows, newRows);
   } finally {
     lock.releaseLock();
   }
   return admin_load();
+}
+
+// Запись в историю: что за объект и какие поля поменялись.
+function logAdminChange_(sheetName, headers, oldRows, newRows) {
+  const asObj = function (r) {
+    const o = {};
+    headers.forEach(function (h, i) { if (h) o[h] = String(r[i] === undefined ? '' : r[i]); });
+    return o;
+  };
+  const before = oldRows[0] ? asObj(oldRows[0]) : null;
+  const after = newRows[0] || null;
+  const label = function (o) {
+    if (!o) return '';
+    return String(o['Название'] || o['ID'] || o['Имя'] || o['Чемпионат'] || o['Telegram'] || '').trim();
+  };
+  const verb = !before ? 'добавил' : !after ? 'удалил' : 'изменил';
+  const what = { 'Люди': 'человека', 'События': 'гонку', 'Чемпионаты': 'чемпионат', 'Тренировки': 'тренировку',
+    'Записи на тренировки': 'запись на тренировку', 'Заработок': 'запись о заработке' }[sheetName] || sheetName;
+  let details = label(after) || label(before);
+  if (before && after) {
+    const changes = [];
+    Object.keys(after).forEach(function (h) {
+      const a = String(before[h] === undefined ? '' : before[h]);
+      const b = String(after[h] === undefined ? '' : after[h]);
+      if (a !== b) changes.push(h + ': «' + a + '» → «' + b + '»');
+    });
+    if (sheetName === 'События') {
+      // Составы лежат в нескольких строках: сравниваем всех пилотов и менеджеров гонки.
+      ['Пилоты', 'Менеджер'].forEach(function (h) {
+        const list = function (rows) {
+          return rows.map(function (r) { return String(r[h] === undefined ? '' : r[h]); }).join(',').split(/[,;\n]+/)
+            .map(function (x) { return x.trim(); }).filter(Boolean).sort().join(', ');
+        };
+        const a = list(oldRows.map(asObj));
+        const b = list(newRows);
+        if (a !== b && changes.every(function (c) { return c.indexOf(h + ':') !== 0; })) changes.push(h + ': «' + a + '» → «' + b + '»');
+      });
+    }
+    details += changes.length ? ' — ' + changes.join('; ') : ' — без изменений в основной строке';
+  }
+  logAction_({ name: 'Админ-панель' }, { label: Session.getActiveUser().getEmail() }, 'Админ ' + verb + ' ' + what, details);
 }
 
 function adminHeaders_(rows) {

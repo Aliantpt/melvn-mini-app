@@ -172,7 +172,7 @@
   // ---- Данные ----
   let data = null;
   let section = 'events';
-  const ui = { q: '', when: 'upcoming', champ: '' };
+  const ui = { q: '', when: 'upcoming', champ: '', who: '', kind: '', historyLimit: 200 };
 
   function sheet(name) {
     return (data && data.sheets[name]) || { headers: [], rows: [] };
@@ -339,7 +339,7 @@
   // ---- Навигация ----
   const SECTIONS = [
     ['events', 'Гонки'], ['trainings', 'Тренировки'], ['people', 'Люди'],
-    ['champs', 'Чемпионаты'], ['income', 'Заработок'], ['archive', 'Архив'],
+    ['champs', 'Чемпионаты'], ['income', 'Заработок'], ['archive', 'Архив'], ['history', 'История'],
   ];
   function counts() {
     return {
@@ -349,6 +349,7 @@
       champs: championships().length,
       income: objects('Заработок').length,
       archive: groupEvents('Архив событий').length + trainings('Архив тренировок').length,
+      history: objects('История действий').length,
     };
   }
   function render() {
@@ -356,10 +357,11 @@
     $('#nav').innerHTML = SECTIONS.map((s) => '<button class="' + (s[0] === section ? 'on' : '') + '" data-sec="' + s[0] + '">' + s[1] + ' <span class="cnt">' + c[s[0]] + '</span></button>').join('');
     $$('[data-sec]').forEach((b) => (b.onclick = () => { section = b.dataset.sec; ui.q = ''; render(); }));
     const m = $('#main');
-    m.innerHTML = ({ events: eventsView, trainings: trainingsView, people: peopleView, champs: champsView, income: incomeView, archive: archiveView })[section]();
+    m.innerHTML = ({ events: eventsView, trainings: trainingsView, people: peopleView, champs: champsView, income: incomeView, archive: archiveView, history: historyView })[section]();
     bindToolbar();
     if (section === 'champs') bindChamps();
     if (section === 'income') bindIncome();
+    if (section === 'history') bindHistory();
   }
 
   function toolbar(addLabel, extra) {
@@ -689,6 +691,35 @@
       const x = rows[Number(b.dataset.inc)];
       if (await confirmBox('Удалить запись ' + nameOf(x.obj['Менеджер']) + ' на ' + money(x.obj['Сумма']) + '?')) replace('Заработок', [x.raw], [], 'Удалено');
     }));
+  }
+
+  // ---- История ----
+  // Строки идут в порядке записи, поэтому новые — в конце листа.
+  function historyView() {
+    const all = objects('История действий').map((x) => x.obj).reverse();
+    const whoList = Array.from(new Set(all.map((h) => h['Кто']).filter(Boolean))).sort((a, b) => a.localeCompare(b, 'ru'));
+    const kinds = Array.from(new Set(all.map((h) => h['Действие']).filter(Boolean))).sort((a, b) => a.localeCompare(b, 'ru'));
+    const list = all.filter((h) => (!ui.who || h['Кто'] === ui.who) && (!ui.kind || h['Действие'] === ui.kind) &&
+      match([h['Кто'], h['Telegram'], h['Действие'], h['Подробности']].join(' ')));
+    const shown = list.slice(0, ui.historyLimit || 200);
+    const sel = (id, value, items, allLabel) => '<select class="input" id="' + id + '"><option value="">' + allLabel + '</option>' +
+      items.map((x) => '<option' + (x === value ? ' selected' : '') + '>' + esc(x) + '</option>').join('') + '</select>';
+    return '<h1>История действий</h1><div class="hint" style="margin:-6px 0 14px">Кто и когда открывал приложение и что менял. Лист «История действий» в таблице очищается сам раз в 3 дня.</div>' +
+      toolbar('', sel('h-who', ui.who, whoList, 'Все люди') + sel('h-kind', ui.kind, kinds, 'Все действия')).replace('Поиск по названию', 'Поиск') +
+      '<div class="list">' + (shown.map((h) =>
+        '<div class="item static"><div class="main"><div class="title">' + esc(h['Действие']) + '</div>' +
+        (h['Подробности'] ? '<div class="meta" style="white-space:normal">' + esc(h['Подробности']) + '</div>' : '') + '</div>' +
+        '<div class="side">' + esc(h['Время']) + '<br>' + esc(h['Кто']) + (h['Telegram'] ? ' · ' + esc(h['Telegram']) : '') + '</div></div>').join('') ||
+        '<div class="empty">Пока пусто</div>') + '</div>' +
+      (list.length > shown.length ? '<div style="text-align:center;margin-top:12px"><button class="btn ghost" id="h-more">Показать ещё (' + (list.length - shown.length) + ')</button></div>' : '');
+  }
+  function bindHistory() {
+    const who = $('#h-who');
+    const kind = $('#h-kind');
+    if (who) who.onchange = () => { ui.who = who.value; render(); };
+    if (kind) kind.onchange = () => { ui.kind = kind.value; render(); };
+    const more = $('#h-more');
+    if (more) more.onclick = () => { ui.historyLimit = (ui.historyLimit || 200) + 200; render(); };
   }
 
   // ---- Архив ----

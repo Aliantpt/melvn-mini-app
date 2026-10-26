@@ -185,7 +185,12 @@ function loadGas(botToken, sheets, today = '2026-10-25', user = { active: '', ef
   const ctx = {
     Utilities: {
       newBlob: (s) => ({ getBytes: () => signed(Buffer.from(s, 'utf8')) }),
-      formatDate: () => today,
+      formatDate: (d, tz, fmt) => {
+        if (fmt === 'yyyy-MM-dd') return today;
+        const p = Object.fromEntries(new Intl.DateTimeFormat('en-GB', { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23' })
+          .formatToParts(d).map((x) => [x.type, x.value]));
+        return fmt.replace('dd', p.day).replace('MM', p.month).replace('yyyy', p.year).replace('HH', p.hour).replace('mm', p.minute).replace('ss', p.second);
+      },
       computeHmacSha256Signature: (value, key) => signed(createHmac('sha256', unsigned(key)).update(unsigned(value)).digest()),
     },
     PropertiesService: {
@@ -235,6 +240,7 @@ function loadGas(botToken, sheets, today = '2026-10-25', user = { active: '', ef
       }),
       appendRow: (row) => sheets[name].push(row),
       deleteRow: (n) => sheets[name].splice(n - 1, 1),
+      deleteRows: (n, count) => sheets[name].splice(n - 1, count),
       getRange: (row, col) => ({
         setValue: (v) => {
           while (sheets[name].length < row) sheets[name].push([]);
@@ -582,4 +588,37 @@ test('Admin: edits rows in place, adds, deletes and refuses on conflicts', () =>
   // Формула из поля сохраняется текстом.
   g.ctx.admin_replace('Чемпионаты', [], [{ 'Чемпионат': '=HYPERLINK("x")' }]);
   assert.equal(sheets['Чемпионаты'].at(-1)[0], `'=HYPERLINK("x")`);
+});
+
+test('History: app opens, denied access, user actions and admin edits are logged; cleared every 3 days', () => {
+  const sheets = JSON.parse(JSON.stringify(gasSheets));
+  delete sheets['История действий']; // другие тесты пишут в общий gasSheets
+  const g = loadGas('123:ABC', sheets, undefined, { active: 'owner@gmail.com', effective: 'owner@gmail.com' });
+  const as = (username, id = 7) => signInitData('123:ABC', { id, username }).toString();
+  const hist = () => sheets['История действий'].slice(2).map((r) => [r[1], r[2], r[3], r[4]].map((v) => String(v ?? '').replace(/^'/, '')));
+
+  g({ initData: as('ivan_petrov', 42) });
+  g({ initData: as('ivan_petrov', 42) }); // повторное открытие в течение 10 минут не пишется
+  g({ initData: as('stranger', 99) });
+  g({ initData: as('oleg_manager'), action: 'addIncome', raceId: 'R1', amount: '4 000', note: 'за этап' });
+  assert.deepEqual(hist(), [
+    ['Иван Петров', '@ivan_petrov', 'Открыл приложение', ''],
+    ['Не из команды', '@stranger', 'Попытка входа без доступа', 'Нет на листе «Люди» или «Активен» = Нет'],
+    ['Олег', '@oleg_manager', 'Внёс заработок', '4000 ₽ — Этап 3 (за этап)'],
+  ]);
+  assert.match(sheets['История действий'][2][0], /^'\d{2}\.\d{2}\.\d{4} /);
+
+  const d = g.ctx.admin_load();
+  const people = d.sheets['Люди'];
+  const row = people.rows.find((r) => r[0] === 'ivan_petrov');
+  const obj = Object.fromEntries(people.headers.map((h, i) => [h, row[i]]));
+  g.ctx.admin_replace('Люди', [row], [{ ...obj, 'Имя': 'Иван П.' }]);
+  assert.deepEqual(hist().at(-1), ['Админ-панель', 'owner@gmail.com', 'Админ изменил человека', 'Иван П. — Имя: «Иван Петров» → «Иван П.»']);
+  assert.ok(g.ctx.admin_load().sheets['История действий'].rows.length >= 4);
+
+  // Через 3 дня история очищается целиком.
+  const later = Date.now() + 3 * 24 * 3600 * 1000 + 1000;
+  vm.runInContext('Date.now = () => ' + later, g.ctx);
+  g({ initData: signInitData('123:ABC', { id: 555, username: 'anna_smirnova' }, Math.floor(later / 1000)).toString() });
+  assert.deepEqual(hist().filter((r) => r.some(Boolean)).map((r) => r[2]), ['Открыл приложение']);
 });
