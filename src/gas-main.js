@@ -36,6 +36,8 @@ const MAX_WRITES_PER_HOUR = 30;
 
 function doGet(e) {
   const initData = (e && e.parameter && e.parameter.initData) || '';
+  // Без подписи Telegram это не приложение, а браузер: показываем админ-панель (только владельцу).
+  if (!initData && e && e.parameter && e.parameter.admin !== undefined) return adminPage_();
   const user = verifyInitData(initData, botToken());
   if (!user) return jsonOut({ error: 'not_telegram' });
   try {

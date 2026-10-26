@@ -174,7 +174,7 @@ test('earned: only my income rows; managers get the form with their races', () =
 });
 
 // Запуск собранного dist/Code.gs в песочнице с заглушками сервисов Google.
-function loadGas(botToken, sheets, today = '2026-10-25') {
+function loadGas(botToken, sheets, today = '2026-10-25', user = { active: '', effective: 'owner@gmail.com' }) {
   const cache = {};
   const props = {};
   const fetched = [];
@@ -201,8 +201,16 @@ function loadGas(botToken, sheets, today = '2026-10-25') {
     SpreadsheetApp: {
       getActiveSpreadsheet: () => ({
         getSheetByName: (name) => (sheets[name] ? sheetApi(name) : null),
+        getUrl: () => 'https://docs.google.com/spreadsheets/d/x',
         insertSheet: (name) => ((sheets[name] = []), sheetApi(name)),
       }),
+    },
+    Session: {
+      getActiveUser: () => ({ getEmail: () => user.active }),
+      getEffectiveUser: () => ({ getEmail: () => user.effective }),
+    },
+    HtmlService: {
+      createHtmlOutput: (html) => ({ html, setTitle() { return this; }, addMetaTag() { return this; } }),
     },
     LockService: { getScriptLock: () => ({ waitLock() {}, tryLock: () => true, releaseLock() {} }) },
     CacheService: { getScriptCache: () => ({ get: (k) => cache[k] ?? null, put: (k, v) => (cache[k] = v) }) },
@@ -231,6 +239,10 @@ function loadGas(botToken, sheets, today = '2026-10-25') {
         setValue: (v) => {
           while (sheets[name].length < row) sheets[name].push([]);
           sheets[name][row - 1][col - 1] = v;
+        },
+        setValues: (vals) => {
+          while (sheets[name].length < row) sheets[name].push([]);
+          vals[0].forEach((v, i) => (sheets[name][row - 1][col - 1 + i] = v));
         },
       }),
       setFrozenRows() {},
@@ -522,4 +534,52 @@ test('Apps Script: failed reminder sends are retried, permanent errors are not',
   g2.ctx.sendReminders();
   g2.ctx.sendReminders();
   assert.equal(g2.fetched.length, 1);
+});
+
+test('Admin: only the owner gets the page and the data', () => {
+  const sheets = JSON.parse(JSON.stringify(gasSheets));
+  const anon = loadGas('123:ABC', sheets);
+  assert.match(anon.ctx.doGet({ parameter: { admin: '' } }).html, /Нет доступа/);
+  assert.throws(() => anon.ctx.admin_load(), /Нет доступа/);
+  assert.throws(() => anon.ctx.admin_replace('Люди', [], [{ Telegram: 'evil', 'Имя': 'x', 'Руководство': 'Да' }]), /Нет доступа/);
+  const stranger = loadGas('123:ABC', sheets, undefined, { active: 'someone@gmail.com', effective: 'owner@gmail.com' });
+  assert.throws(() => stranger.ctx.admin_load(), /Нет доступа/);
+  const owner = loadGas('123:ABC', sheets, undefined, { active: 'owner@gmail.com', effective: 'owner@gmail.com' });
+  assert.match(owner.ctx.doGet({ parameter: { admin: '' } }).html, /админ-панель/);
+  assert.deepEqual(owner.ctx.admin_load().sheets['Люди'].headers.slice(0, 2), ['Telegram', 'Имя']);
+  // Мини-приложение по-прежнему отвечает JSON.
+  assert.equal(owner({}).error, 'not_telegram');
+});
+
+test('Admin: edits rows in place, adds, deletes and refuses on conflicts', () => {
+  const sheets = JSON.parse(JSON.stringify(gasSheets));
+  const g = loadGas('123:ABC', sheets, undefined, { active: 'owner@gmail.com', effective: 'owner@gmail.com' });
+  let d = g.ctx.admin_load();
+  const people = d.sheets['Люди'];
+  const ivanRow = people.rows.find((r) => r[0] === 'ivan_petrov');
+  const obj = Object.fromEntries(people.headers.map((h, i) => [h, ivanRow[i]]));
+  const pos = sheets['Люди'].findIndex((r) => r[0] === 'ivan_petrov');
+
+  d = g.ctx.admin_replace('Люди', [ivanRow], [{ ...obj, 'Имя': 'Иван П.', 'Телефон': '+7 900 111-22-33' }]);
+  assert.equal(sheets['Люди'][pos][1], 'Иван П.');
+  assert.ok(sheets['Люди'][pos].includes("'+7 900 111-22-33"));
+  // Та же старая строка второй раз — уже конфликт.
+  assert.equal(g.ctx.admin_replace('Люди', [ivanRow], [obj]).error, 'conflict');
+
+  // Новая гонка с двумя составами, затем удаление.
+  const before = sheets['События'].length;
+  d = g.ctx.admin_replace('События', [], [
+    { ID: 'N1', 'Тип': 'Гонка', 'Дата': '01.12.2026', 'Состав': 'A', 'Пилоты': 'ivan_petrov' },
+    { ID: 'N1', 'Состав': 'B', 'Пилоты': '555' },
+  ]);
+  const n1 = d.sheets['События'].rows.filter((r) => r[0] === 'N1');
+  assert.equal(n1.length, 2);
+  g.ctx.admin_replace('События', n1, []);
+  assert.equal(sheets['События'].filter((r) => r[0] === 'N1').length, 0);
+  assert.equal(sheets['События'].length, before);
+
+  assert.throws(() => g.ctx.admin_replace('Архив событий', [], [{ ID: 'x' }]), /не меняется/);
+  // Формула из поля сохраняется текстом.
+  g.ctx.admin_replace('Чемпионаты', [], [{ 'Чемпионат': '=HYPERLINK("x")' }]);
+  assert.equal(sheets['Чемпионаты'].at(-1)[0], `'=HYPERLINK("x")`);
 });

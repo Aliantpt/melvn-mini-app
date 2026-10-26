@@ -1,0 +1,709 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>M-ELVN — админ-панель</title>
+<style>
+  :root {
+    --orange: #ff5a00; --carbon: #101011; --white: #ffffff;
+    --bg: #1b1b1d; --bg3: #232326; --line: #2a2a2d; --hint: #9a9aa0; --danger: #ff4d4f;
+    color-scheme: dark;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--carbon); color: var(--white); font: 14px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; -webkit-font-smoothing: antialiased; }
+  button, input, select, textarea { font: inherit; color: inherit; }
+  .top { position: sticky; top: 0; z-index: 5; display: flex; align-items: center; gap: 12px; padding: 12px 20px; background: var(--bg); border-bottom: 1px solid var(--line); }
+  .brand { font-weight: 800; letter-spacing: .04em; }
+  .brand::before { content: ""; display: inline-block; width: 8px; height: 8px; border-radius: 2px; background: var(--orange); margin-right: 8px; vertical-align: middle; }
+  .brand small { font-weight: 600; letter-spacing: 0; color: var(--hint); margin-left: 6px; }
+  .spacer { flex: 1; }
+  .me { color: var(--hint); font-size: 12px; }
+  .layout { display: flex; min-height: calc(100vh - 57px); }
+  nav { width: 200px; flex: none; padding: 14px 10px; border-right: 1px solid var(--line); }
+  nav button { display: flex; justify-content: space-between; width: 100%; text-align: left; border: 0; background: none; padding: 9px 12px; border-radius: 9px; color: var(--hint); font-weight: 600; cursor: pointer; }
+  nav button:hover { background: var(--bg); color: var(--white); }
+  nav button.on { background: var(--white); color: var(--carbon); }
+  nav .cnt { font-weight: 500; opacity: .7; }
+  main { flex: 1; min-width: 0; padding: 18px 22px 60px; max-width: 1100px; }
+  h1 { font-size: 22px; margin: 0 0 14px; }
+  .bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 14px; }
+  .input, select.input, textarea.input { background: var(--bg); border: 1px solid var(--line); border-radius: 10px; padding: 8px 11px; min-width: 0; }
+  .input:focus { outline: none; border-color: var(--orange); }
+  textarea.input { width: 100%; min-height: 90px; resize: vertical; }
+  .search { flex: 1; min-width: 180px; }
+  .btn { border: 0; border-radius: 10px; padding: 9px 14px; background: var(--orange); color: var(--white); font-weight: 600; cursor: pointer; white-space: nowrap; }
+  .btn:disabled { opacity: .5; cursor: default; }
+  .btn.ghost { background: var(--line); }
+  .btn.danger { background: transparent; color: var(--danger); box-shadow: inset 0 0 0 1px var(--danger); }
+  .btn.small { padding: 5px 10px; font-size: 13px; }
+  .seg { display: inline-flex; background: var(--bg); border-radius: 10px; padding: 3px; }
+  .seg button { border: 0; background: none; padding: 6px 12px; border-radius: 8px; color: var(--hint); font-weight: 600; cursor: pointer; }
+  .seg button.on { background: var(--white); color: var(--carbon); }
+  .list { display: flex; flex-direction: column; gap: 8px; }
+  .item { display: flex; gap: 14px; align-items: center; width: 100%; text-align: left; border: 0; background: var(--bg); border-radius: 12px; padding: 11px 14px; cursor: pointer; }
+  .item:hover { background: var(--bg3); }
+  .item .main { flex: 1; min-width: 0; }
+  .item .title { font-weight: 600; }
+  .item .meta { color: var(--hint); font-size: 13px; margin-top: 2px; overflow: hidden; text-overflow: ellipsis; }
+  .item .side { color: var(--hint); font-size: 13px; text-align: right; white-space: nowrap; }
+  .item.static { cursor: default; }
+  .item.static:hover { background: var(--bg); }
+  .champ { color: var(--orange); font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; }
+  .badges { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
+  .badge { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .03em; padding: 2px 7px; border-radius: 6px; background: var(--line); color: var(--hint); white-space: nowrap; }
+  .badge.race { background: var(--orange); color: var(--white); }
+  .badge.off { background: #777; color: #fff; }
+  .badge.warn { background: transparent; color: var(--orange); box-shadow: inset 0 0 0 1px var(--orange); }
+  .empty { color: var(--hint); padding: 30px 0; text-align: center; }
+  .cancelled .title { text-decoration: line-through; }
+  /* Редактор */
+  .shade { position: fixed; inset: 0; background: rgba(0,0,0,.55); z-index: 20; display: flex; justify-content: flex-end; }
+  .drawer { width: min(640px, 100%); height: 100%; overflow-y: auto; background: var(--carbon); border-left: 1px solid var(--line); padding: 20px 22px 30px; }
+  .drawer h2 { margin: 0 0 16px; font-size: 20px; display: flex; align-items: center; gap: 10px; }
+  .drawer h2 .x { margin-left: auto; }
+  .grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px 14px; }
+  .grid .wide { grid-column: 1 / -1; }
+  .field label { display: block; font-size: 12px; color: var(--hint); margin-bottom: 4px; font-weight: 600; }
+  .field .input { width: 100%; }
+  .req::after { content: " *"; color: var(--orange); }
+  .box { background: var(--bg); border-radius: 12px; padding: 12px 14px; margin-top: 14px; }
+  .box h3 { margin: 0 0 10px; font-size: 12px; color: var(--hint); text-transform: uppercase; letter-spacing: .04em; display: flex; align-items: center; gap: 8px; }
+  .box h3 .btn { margin-left: auto; }
+  .crew { border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; margin-top: 10px; }
+  .crew-head { display: flex; gap: 8px; align-items: center; }
+  .crew-head .input { flex: 1; }
+  .who { margin-top: 10px; }
+  .who > span { display: block; font-size: 12px; color: var(--hint); margin-bottom: 4px; font-weight: 600; }
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+  .chip { display: inline-flex; align-items: center; gap: 4px; background: var(--bg3); border-radius: 999px; padding: 4px 6px 4px 11px; font-size: 13px; }
+  .chip.unknown { box-shadow: inset 0 0 0 1px var(--orange); }
+  .chip button { border: 0; background: none; color: var(--hint); cursor: pointer; font-size: 16px; line-height: 1; padding: 0 4px; }
+  .chips select { background: var(--carbon); border: 1px dashed var(--line); border-radius: 999px; padding: 4px 10px; color: var(--hint); font-size: 13px; max-width: 220px; }
+  .checks { display: flex; flex-wrap: wrap; gap: 14px; }
+  .check { display: inline-flex; align-items: center; gap: 7px; cursor: pointer; }
+  .check input { width: 17px; height: 17px; accent-color: var(--orange); }
+  .actions { display: flex; gap: 8px; margin-top: 20px; position: sticky; bottom: -30px; padding: 12px 0; background: var(--carbon); }
+  .actions .spacer { flex: 1; }
+  .err { color: var(--orange); font-size: 13px; margin-top: 10px; min-height: 1em; }
+  .row-line { display: flex; align-items: center; gap: 10px; padding: 7px 0; border-top: 1px solid var(--line); }
+  .row-line:first-of-type { border-top: 0; }
+  .row-line .grow { flex: 1; min-width: 0; }
+  .hint { color: var(--hint); font-size: 12px; }
+  .toast { position: fixed; left: 50%; bottom: 22px; transform: translateX(-50%); background: var(--white); color: var(--carbon); padding: 10px 16px; border-radius: 10px; font-weight: 600; z-index: 40; box-shadow: 0 6px 24px rgba(0,0,0,.4); max-width: calc(100% - 32px); }
+  .toast.bad { background: var(--orange); color: var(--white); }
+  .loading { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; color: var(--hint); }
+  .modal { position: fixed; inset: 0; z-index: 50; background: rgba(0,0,0,.6); display: flex; align-items: center; justify-content: center; padding: 16px; }
+  .modal > div { background: var(--bg); border-radius: 14px; padding: 18px; max-width: 380px; width: 100%; }
+  .modal p { margin: 0 0 16px; }
+  .modal .actions { position: static; margin: 0; padding: 0; background: none; justify-content: flex-end; }
+  @media (max-width: 760px) {
+    .layout { flex-direction: column; }
+    nav { width: auto; display: flex; gap: 4px; overflow-x: auto; border-right: 0; border-bottom: 1px solid var(--line); padding: 8px 12px; }
+    nav button { width: auto; flex: none; gap: 6px; }
+    main { padding: 14px 14px 60px; }
+    .grid { grid-template-columns: 1fr; }
+    .me { display: none; }
+    .top { padding: 12px 14px; }
+    .drawer { padding: 16px 14px 30px; }
+  }
+</style>
+</head>
+<body>
+<header class="top">
+  <div class="brand">M-ELVN<small>админ-панель</small></div>
+  <div class="spacer"></div>
+  <span class="me" id="me"></span>
+  <a class="btn ghost small" id="sheet-link" target="_blank" rel="noopener" style="text-decoration:none" hidden>Таблица</a>
+  <button class="btn ghost small" id="reload">Обновить</button>
+</header>
+<div class="layout">
+  <nav id="nav"></nav>
+  <main id="main"><div class="loading">Загрузка…</div></main>
+</div>
+<div id="layer"></div>
+<script>
+(function () {
+  'use strict';
+  // ---- Связь с таблицей ----
+  function call(fn) {
+    const args = Array.prototype.slice.call(arguments, 1);
+    return new Promise(function (resolve, reject) {
+      google.script.run.withSuccessHandler(resolve).withFailureHandler(reject)[fn].apply(null, args);
+    });
+  }
+
+  const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  const $ = (sel, root) => (root || document).querySelector(sel);
+  const $$ = (sel, root) => Array.prototype.slice.call((root || document).querySelectorAll(sel));
+  const yes = (v) => ['да', 'yes', 'true', '1', '+', 'x', 'х'].indexOf(String(v || '').trim().toLowerCase()) >= 0;
+  const norm = (v) => String(v || '').trim().replace(/^@/, '').replace(/^https?:\/\/t\.me\//i, '').toLowerCase();
+  const split = (v) => String(v || '').split(/[,;\n]+/).map((x) => x.trim().replace(/^@/, '')).filter(Boolean);
+
+  // Даты: в таблице «ДД.ММ.ГГГГ», в полях формы «ГГГГ-ММ-ДД».
+  function toIso(v) {
+    const s = String(v || '').trim();
+    let m = s.match(/^(\d{1,2})[./-](\d{1,2})[./-](\d{4})$/);
+    if (m) return m[3] + '-' + m[2].padStart(2, '0') + '-' + m[1].padStart(2, '0');
+    m = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
+    return m ? m[1] + '-' + m[2].padStart(2, '0') + '-' + m[3].padStart(2, '0') : '';
+  }
+  const fromIso = (iso) => (iso ? iso.split('-').reverse().join('.') : '');
+  const toTime = (v) => {
+    const m = String(v || '').trim().match(/^(\d{1,2})[:.](\d{2})/);
+    return m ? m[1].padStart(2, '0') + ':' + m[2] : '';
+  };
+  const MONTHS = ['января', 'февраля', 'марта', 'апреля', 'мая', 'июня', 'июля', 'августа', 'сентября', 'октября', 'ноября', 'декабря'];
+  const DAYS = ['вс', 'пн', 'вт', 'ср', 'чт', 'пт', 'сб'];
+  function fmtDate(iso) {
+    if (!iso) return 'без даты';
+    const p = iso.split('-').map(Number);
+    return p[2] + ' ' + MONTHS[p[1] - 1] + ' ' + p[0] + ', ' + DAYS[new Date(p[0], p[1] - 1, p[2]).getDay()];
+  }
+  const today = () => {
+    const t = new Date();
+    return t.getFullYear() + '-' + String(t.getMonth() + 1).padStart(2, '0') + '-' + String(t.getDate()).padStart(2, '0');
+  };
+  const money = (v) => {
+    const n = Number(String(v || '').replace(/[\s ]/g, '').replace(/[.,](?=\d{3}(?:[.,]|$))/g, '').replace(',', '.').match(/\d+(?:\.\d+)?/));
+    return isFinite(n) && n ? Math.round(n).toLocaleString('ru-RU') + ' ₽' : String(v || '');
+  };
+
+  // ---- Данные ----
+  let data = null;
+  let section = 'events';
+  const ui = { q: '', when: 'upcoming', champ: '' };
+
+  function sheet(name) {
+    return (data && data.sheets[name]) || { headers: [], rows: [] };
+  }
+  function objects(name) {
+    const s = sheet(name);
+    return s.rows.map((r) => {
+      const o = {};
+      s.headers.forEach((h, i) => { if (h) o[h] = r[i] == null ? '' : String(r[i]); });
+      return { obj: o, raw: r };
+    });
+  }
+
+  function people() {
+    return objects('Люди').map((x) => {
+      const o = x.obj;
+      const key = norm(o['Telegram']) || norm(o['Telegram ID']);
+      return {
+        raw: x.raw, obj: o, key, keys: [norm(o['Telegram']), norm(o['Telegram ID'])].filter(Boolean),
+        name: o['Имя'] || (key ? '@' + key : '—'),
+        pilot: yes(o['Пилот']), manager: yes(o['Менеджер']), lead: yes(o['Руководство']),
+        active: String(o['Активен'] || '').trim().toLowerCase() !== 'нет',
+      };
+    });
+  }
+  function nameOf(handle) {
+    const k = norm(handle);
+    const p = people().find((x) => x.keys.indexOf(k) >= 0);
+    return p ? p.name : '@' + handle;
+  }
+
+  // Гонка = все строки с одним ID: первая с датой — основная, каждая строка — состав.
+  function groupEvents(name) {
+    const map = new Map();
+    objects(name).forEach((x) => {
+      const id = String(x.obj['ID'] || '').trim();
+      if (!id) return;
+      if (!map.has(id)) map.set(id, { id, rows: [], base: null, crews: [] });
+      const g = map.get(id);
+      g.rows.push(x);
+      if (!g.base || (!toIso(g.base['Дата']) && toIso(x.obj['Дата']))) g.base = x.obj;
+      const crew = { name: x.obj['Состав'] || '', managers: split(x.obj['Менеджер']), pilots: split(x.obj['Пилоты']) };
+      if (crew.name || crew.managers.length || crew.pilots.length) g.crews.push(crew);
+    });
+    return Array.from(map.values()).map((g) => {
+      const b = g.base;
+      const stage = String(b['Этап'] || '').trim();
+      const stageText = /^\d+$/.test(stage) ? (/трен/i.test(b['Тип']) ? 'Тренировка ' : 'Этап ') + stage : stage;
+      g.date = toIso(b['Дата']);
+      g.title = b['Название'] || [b['Чемпионат'], stageText].filter(Boolean).join(' — ') || g.id;
+      g.cancelled = String(b['Статус'] || '').trim().toLowerCase().indexOf('отмен') === 0;
+      return g;
+    });
+  }
+
+  function trainings(name) {
+    return objects(name).filter((x) => String(x.obj['ID'] || '').trim()).map((x) => {
+      const o = x.obj;
+      return {
+        raw: x.raw, obj: o, id: String(o['ID']).trim(), date: toIso(o['Дата']),
+        title: o['Название'] || o['Тип'] || 'Тренировка',
+        cancelled: String(o['Статус'] || '').trim().toLowerCase().indexOf('отмен') === 0,
+      };
+    });
+  }
+  function signups() {
+    return objects('Записи на тренировки').map((x) => ({ raw: x.raw, obj: x.obj, training: String(x.obj['ID тренировки'] || '').trim() }));
+  }
+
+  // ---- Сохранение ----
+  async function replace(sheetName, oldRows, newRows, okText) {
+    try {
+      const res = await call('admin_replace', sheetName, oldRows, newRows);
+      if (res && res.error === 'conflict') {
+        toast('Пока вы редактировали, эти строки поменяли в таблице. Данные обновлены — повторите правку.', true);
+        await load();
+        return false;
+      }
+      data = res;
+      closeDrawer();
+      render();
+      toast(okText || 'Сохранено');
+      return true;
+    } catch (e) {
+      toast('Не удалось сохранить: ' + (e && e.message ? e.message : e), true);
+      return false;
+    }
+  }
+
+  async function load() {
+    try {
+      data = await call('admin_load');
+      $('#me').textContent = data.me || '';
+      if (data.url) {
+        $('#sheet-link').href = data.url;
+        $('#sheet-link').hidden = false;
+      }
+      render();
+    } catch (e) {
+      $('#main').innerHTML = '<div class="empty">Не удалось загрузить данные: ' + esc(e && e.message ? e.message : e) + '</div>';
+    }
+  }
+
+  // ---- Общие элементы ----
+  let toastTimer = null;
+  function toast(text, bad) {
+    let t = $('.toast');
+    if (!t) {
+      t = document.createElement('div');
+      document.body.appendChild(t);
+    }
+    t.className = 'toast' + (bad ? ' bad' : '');
+    t.textContent = text;
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => t.remove(), bad ? 6000 : 2500);
+  }
+
+  function confirmBox(text, okLabel) {
+    return new Promise((resolve) => {
+      const m = document.createElement('div');
+      m.className = 'modal';
+      m.innerHTML = '<div><p>' + esc(text) + '</p><div class="actions"><button class="btn ghost" data-no>Отмена</button><button class="btn" data-yes>' + esc(okLabel || 'Удалить') + '</button></div></div>';
+      document.body.appendChild(m);
+      const done = (v) => { m.remove(); resolve(v); };
+      $('[data-no]', m).onclick = () => done(false);
+      $('[data-yes]', m).onclick = () => done(true);
+      m.onclick = (e) => { if (e.target === m) done(false); };
+    });
+  }
+
+  function openDrawer(html) {
+    $('#layer').innerHTML = '<div class="shade"><div class="drawer">' + html + '</div></div>';
+    const shade = $('#layer .shade');
+    shade.addEventListener('mousedown', (e) => { if (e.target === shade) closeDrawer(); });
+    $$('[data-close]', shade).forEach((b) => (b.onclick = closeDrawer));
+    return $('.drawer', shade);
+  }
+  function closeDrawer() {
+    $('#layer').innerHTML = '';
+  }
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !$('.modal')) closeDrawer(); });
+
+  const field = (label, html, cls) => '<div class="field ' + (cls || '') + '"><label class="' + (/\*$/.test(label) ? 'req' : '') + '">' + esc(label.replace(/\s*\*$/, '')) + '</label>' + html + '</div>';
+  const input = (name, value, attrs) => '<input class="input" name="' + esc(name) + '" value="' + esc(value) + '" ' + (attrs || '') + '>';
+  const select = (name, value, options, attrs) => {
+    const opts = options.slice();
+    if (value && opts.indexOf(value) < 0) opts.unshift(value);
+    return '<select class="input" name="' + esc(name) + '" ' + (attrs || '') + '>' + opts.map((o) => '<option value="' + esc(o) + '"' + (o === value ? ' selected' : '') + '>' + esc(o || '—') + '</option>').join('') + '</select>';
+  };
+  const formValues = (root) => {
+    const o = {};
+    $$('[name]', root).forEach((el) => { o[el.name] = el.type === 'checkbox' ? el.checked : el.value.trim(); });
+    return o;
+  };
+  const championships = () => objects('Чемпионаты').map((x) => String(x.obj['Чемпионат'] || '').trim()).filter(Boolean);
+  const tracks = () => {
+    const set = new Set();
+    groupEvents('События').forEach((g) => g.base['Трасса'] && set.add(g.base['Трасса']));
+    trainings('Тренировки').forEach((t) => t.obj['Трасса'] && set.add(t.obj['Трасса']));
+    return Array.from(set).sort();
+  };
+  const datalist = (id, items) => '<datalist id="' + id + '">' + items.map((x) => '<option value="' + esc(x) + '">').join('') + '</datalist>';
+
+  // ---- Навигация ----
+  const SECTIONS = [
+    ['events', 'Гонки'], ['trainings', 'Тренировки'], ['people', 'Люди'],
+    ['champs', 'Чемпионаты'], ['income', 'Заработок'], ['archive', 'Архив'],
+  ];
+  function counts() {
+    return {
+      events: groupEvents('События').length,
+      trainings: trainings('Тренировки').length,
+      people: people().length,
+      champs: championships().length,
+      income: objects('Заработок').length,
+      archive: groupEvents('Архив событий').length + trainings('Архив тренировок').length,
+    };
+  }
+  function render() {
+    const c = counts();
+    $('#nav').innerHTML = SECTIONS.map((s) => '<button class="' + (s[0] === section ? 'on' : '') + '" data-sec="' + s[0] + '">' + s[1] + ' <span class="cnt">' + c[s[0]] + '</span></button>').join('');
+    $$('[data-sec]').forEach((b) => (b.onclick = () => { section = b.dataset.sec; ui.q = ''; render(); }));
+    const m = $('#main');
+    m.innerHTML = ({ events: eventsView, trainings: trainingsView, people: peopleView, champs: champsView, income: incomeView, archive: archiveView })[section]();
+    bindToolbar();
+    if (section === 'champs') bindChamps();
+    if (section === 'income') bindIncome();
+  }
+
+  function toolbar(addLabel, extra) {
+    return '<div class="bar"><input class="input search" id="q" placeholder="Поиск" value="' + esc(ui.q) + '">' + (extra || '') + (addLabel ? '<button class="btn" id="add">+ ' + esc(addLabel) + '</button>' : '') + '</div>';
+  }
+  function bindToolbar() {
+    const q = $('#q');
+    if (q) {
+      q.oninput = () => {
+        ui.q = q.value;
+        const pos = q.selectionStart;
+        render();
+        const nq = $('#q');
+        nq.focus();
+        nq.setSelectionRange(pos, pos);
+      };
+    }
+    $$('[data-when]').forEach((b) => (b.onclick = () => { ui.when = b.dataset.when; render(); }));
+    const ch = $('#champ-filter');
+    if (ch) ch.onchange = () => { ui.champ = ch.value; render(); };
+    const add = $('#add');
+    if (add) add.onclick = () => ({ events: () => editEvent(null), trainings: () => editTraining(null), people: () => editPerson(null), champs: addChamp })[section]();
+    $$('[data-event]').forEach((b) => (b.onclick = () => editEvent(b.dataset.event)));
+    $$('[data-training]').forEach((b) => (b.onclick = () => editTraining(b.dataset.training)));
+    $$('[data-person]').forEach((b) => (b.onclick = () => editPerson(Number(b.dataset.person))));
+  }
+  const match = (text) => !ui.q || text.toLowerCase().indexOf(ui.q.trim().toLowerCase()) >= 0;
+  const whenSeg = () => '<div class="seg">' + [['upcoming', 'Предстоящие'], ['past', 'Прошедшие'], ['all', 'Все']].map((w) => '<button class="' + (ui.when === w[0] ? 'on' : '') + '" data-when="' + w[0] + '">' + w[1] + '</button>').join('') + '</div>';
+  function byWhen(list) {
+    const t = today();
+    const key = (x) => (x.date || '9999') + ' ' + toTime((x.base || x.obj)['Начало']);
+    let out = list.filter((x) => ui.when === 'all' || (ui.when === 'upcoming' ? !x.date || x.date >= t : x.date && x.date < t));
+    out.sort((a, b) => (key(a) < key(b) ? -1 : key(a) > key(b) ? 1 : 0));
+    if (ui.when === 'past') out.reverse();
+    return out;
+  }
+
+  // ---- Гонки ----
+  function eventsView() {
+    const champs = championships();
+    const list = byWhen(groupEvents('События')).filter((g) => (!ui.champ || g.base['Чемпионат'] === ui.champ) &&
+      match([g.id, g.title, g.base['Чемпионат'], g.base['Трасса']].concat(g.crews.map((c) => c.name + ' ' + c.pilots.concat(c.managers).map(nameOf).join(' '))).join(' ')));
+    const champSel = '<select class="input" id="champ-filter"><option value="">Все чемпионаты</option>' + champs.map((c) => '<option' + (c === ui.champ ? ' selected' : '') + '>' + esc(c) + '</option>').join('') + '</select>';
+    return '<h1>Гонки и назначенные тренировки</h1>' + toolbar('Гонка', whenSeg() + champSel) +
+      '<div class="list">' + (list.map(eventItem).join('') || '<div class="empty">Ничего не найдено</div>') + '</div>';
+  }
+  function eventItem(g) {
+    const b = g.base;
+    const pilots = g.crews.reduce((n, c) => n + c.pilots.length, 0);
+    const type = b['Тип'] || 'Событие';
+    const champ = b['Чемпионат'] && g.title.indexOf(b['Чемпионат']) !== 0 ? '<div class="champ">' + esc(b['Чемпионат']) + '</div>' : '';
+    return '<button class="item ' + (g.cancelled ? 'cancelled' : '') + '" data-event="' + esc(g.id) + '"><div class="main">' + champ +
+      '<div class="title">' + esc(g.title) + '</div>' +
+      '<div class="meta">' + esc([fmtDate(g.date), toTime(b['Начало']), b['Трасса']].filter(Boolean).join(' · ')) + '</div>' +
+      '<div class="badges">' + (g.cancelled ? '<span class="badge off">Отменено</span>' : '<span class="badge ' + (/гонк/i.test(type) ? 'race' : '') + '">' + esc(type) + '</span>') +
+      (b['Формат'] ? '<span class="badge">' + esc(b['Формат']) + '</span>' : '') + (!g.date ? '<span class="badge warn">Нет даты — в приложении не видна</span>' : '') + '</div></div>' +
+      '<div class="side">' + esc(g.id) + '<br>' + (g.crews.length > 1 ? g.crews.length + ' сост. · ' : '') + pilots + ' пил.</div></button>';
+  }
+
+  // Выбор людей: чипы и выпадающий список «добавить».
+  function picker(role, list) {
+    const ps = people().filter((p) => p.active).sort((a, b) => (b[role] - a[role]) || a.name.localeCompare(b.name, 'ru'));
+    const chips = list.map((h) => {
+      const known = people().some((p) => p.keys.indexOf(norm(h)) >= 0);
+      return '<span class="chip ' + (known ? '' : 'unknown') + '" data-h="' + esc(h) + '" title="' + (known ? '' : 'Нет на листе «Люди»') + '">' + esc(nameOf(h)) + '<button type="button" data-rm aria-label="Убрать">×</button></span>';
+    }).join('');
+    const opts = ps.filter((p) => !list.some((h) => p.keys.indexOf(norm(h)) >= 0))
+      .map((p) => '<option value="' + esc(p.obj['Telegram'] || p.obj['Telegram ID']) + '">' + esc(p.name) + (p[role] ? '' : ' (не ' + (role === 'pilot' ? 'пилот' : 'менеджер') + ')') + '</option>').join('');
+    return '<div class="chips" data-picker="' + role + '">' + chips + '<select data-addp><option value="">+ добавить</option>' + opts + '</select></div>';
+  }
+  function pickerValues(root) {
+    return $$('.chip', root).map((c) => c.dataset.h);
+  }
+
+  function crewHtml(c, i) {
+    return '<div class="crew" data-crew="' + i + '"><div class="crew-head">' +
+      '<input class="input" data-crew-name placeholder="Название состава (если составов несколько)" value="' + esc(c.name) + '">' +
+      '<button type="button" class="btn ghost small" data-crew-del>Убрать состав</button></div>' +
+      '<div class="who"><span>Пилоты</span>' + picker('pilot', c.pilots) + '</div>' +
+      '<div class="who"><span>Менеджер</span>' + picker('manager', c.managers) + '</div></div>';
+  }
+
+  function editEvent(id) {
+    const g = id ? groupEvents('События').find((x) => x.id === id) : null;
+    const b = g ? g.base : { 'Тип': 'Гонка', 'Формат': 'Командная', 'Статус': 'Запланировано' };
+    let crews = g ? g.crews.map((c) => ({ name: c.name, pilots: c.pilots.slice(), managers: c.managers.slice() })) : [{ name: '', pilots: [], managers: [] }];
+    const champs = [''].concat(championships());
+    const d = openDrawer(
+      '<h2>' + (g ? esc(g.title) : 'Новая гонка') + '<button class="btn ghost small x" data-close>Закрыть</button></h2>' +
+      '<form id="f"><div class="grid">' +
+      field('ID *', input('ID', g ? g.id : '', 'required placeholder="Например, ROTY272K"')) +
+      field('Тип', select('Тип', b['Тип'] || '', ['Гонка', 'Тренировка'])) +
+      field('Чемпионат', select('Чемпионат', b['Чемпионат'] || '', champs)) +
+      field('Этап', input('Этап', b['Этап'] || '', 'placeholder="3, 2A, Финал"')) +
+      field('Формат', select('Формат', b['Формат'] || '', ['Командная', 'Личная'])) +
+      field('Статус', select('Статус', b['Статус'] || '', ['Запланировано', 'Отменено'])) +
+      field('Название', input('Название', b['Название'] || '', 'placeholder="Если пусто — «Чемпионат — Этап»"'), 'wide') +
+      field('Дата *', input('Дата', toIso(b['Дата']), 'type="date" required')) +
+      field('Стоимость', input('Стоимость', b['Стоимость'] || '', 'placeholder="7500 Руб."')) +
+      field('Начало', input('Начало', toTime(b['Начало']), 'type="time"')) +
+      field('Окончание', input('Окончание', toTime(b['Окончание']), 'type="time"')) +
+      field('Трасса', input('Трасса', b['Трасса'] || '', 'list="tracks"') + datalist('tracks', tracks())) +
+      field('Адрес', input('Адрес', b['Адрес'] || '')) +
+      field('Регламент', input('Регламент', b['Регламент'] || '', 'placeholder="Ссылка"'), 'wide') +
+      field('Описание', '<textarea class="input" name="Описание">' + esc(b['Описание'] || '') + '</textarea>', 'wide') +
+      '</div><div class="box"><h3>Составы<button type="button" class="btn ghost small" id="add-crew">+ Состав</button></h3><div id="crews"></div>' +
+      '<div class="hint" style="margin-top:8px">Пилоты и менеджер видят гонку в приложении. Оранжевая рамка — человека нет на листе «Люди».</div></div>' +
+      '<div class="err" id="err"></div>' +
+      '<div class="actions">' + (g ? '<button type="button" class="btn danger" id="del">Удалить гонку</button>' : '') + '<div class="spacer"></div><button type="button" class="btn ghost" data-close>Отмена</button><button class="btn" id="save">Сохранить</button></div></form>');
+    $$('[data-close]', d).forEach((x) => (x.onclick = closeDrawer));
+
+    // Составы держим в массиве и перерисовываем.
+    const sync = () => {
+      crews = $$('[data-crew]', d).map((el) => ({
+        name: $('[data-crew-name]', el).value.trim(),
+        pilots: pickerValues($('[data-picker="pilot"]', el)),
+        managers: pickerValues($('[data-picker="manager"]', el)),
+      }));
+    };
+    const drawCrews = () => {
+      $('#crews', d).innerHTML = crews.map(crewHtml).join('') || '<div class="hint">Составов нет — гонку увидит только руководство.</div>';
+      $$('[data-crew]', d).forEach((el, i) => {
+        $('[data-crew-del]', el).onclick = () => { sync(); crews.splice(i, 1); drawCrews(); };
+        $$('[data-rm]', el).forEach((x) => (x.onclick = () => { x.parentNode.remove(); sync(); drawCrews(); }));
+        $$('[data-addp]', el).forEach((s) => (s.onchange = () => {
+          sync();
+          const role = s.parentNode.dataset.picker === 'pilot' ? 'pilots' : 'managers';
+          if (s.value) crews[i][role].push(s.value);
+          drawCrews();
+        }));
+      });
+    };
+    drawCrews();
+    $('#add-crew', d).onclick = () => { sync(); crews.push({ name: '', pilots: [], managers: [] }); drawCrews(); };
+
+    $('#f', d).onsubmit = async (e) => {
+      e.preventDefault();
+      sync();
+      const v = formValues($('.grid', d));
+      const err = $('#err', d);
+      if (!v['ID']) return (err.textContent = 'Укажите ID.');
+      if (!v['Дата']) return (err.textContent = 'Укажите дату — без неё гонка не появится в приложении.');
+      const taken = groupEvents('События').concat(groupEvents('Архив событий')).some((x) => x.id === v['ID'] && (!g || x.id !== g.id));
+      if (taken) return (err.textContent = 'ID «' + v['ID'] + '» уже занят (в гонках или архиве). Придумайте другой.');
+      const baseObj = Object.assign({}, b, v, { 'Дата': fromIso(v['Дата']) });
+      delete baseObj['Состав'];
+      delete baseObj['Менеджер'];
+      delete baseObj['Пилоты'];
+      const list = crews.filter((c) => c.name || c.pilots.length || c.managers.length);
+      const crewObj = (c) => ({ 'Состав': c.name, 'Менеджер': c.managers.join(', '), 'Пилоты': c.pilots.join(', ') });
+      const rows = [Object.assign({}, baseObj, crewObj(list[0] || { name: '', pilots: [], managers: [] }))]
+        .concat(list.slice(1).map((c) => Object.assign({ 'ID': v['ID'] }, crewObj(c))));
+      $('#save', d).disabled = true;
+      const ok = await replace('События', g ? g.rows.map((x) => x.raw) : [], rows, 'Гонка сохранена');
+      if (!ok && $('#save', d)) $('#save', d).disabled = false;
+    };
+    const del = $('#del', d);
+    if (del) del.onclick = async () => {
+      if (await confirmBox('Удалить гонку «' + g.title + '» со всеми составами? Её траты пропадут из финансов.')) replace('События', g.rows.map((x) => x.raw), [], 'Гонка удалена');
+    };
+  }
+
+  // ---- Тренировки ----
+  function trainingsView() {
+    const sign = signups();
+    const list = byWhen(trainings('Тренировки')).filter((t) => match([t.id, t.title, t.obj['Тип'], t.obj['Трасса']].join(' ')));
+    return '<h1>Открытые тренировки</h1>' + toolbar('Тренировка', whenSeg()) + '<div class="list">' + (list.map((t) => {
+      const going = sign.filter((s) => s.training === t.id);
+      return '<button class="item ' + (t.cancelled ? 'cancelled' : '') + '" data-training="' + esc(t.id) + '"><div class="main"><div class="title">' + esc(t.title) + '</div>' +
+        '<div class="meta">' + esc([fmtDate(t.date), toTime(t.obj['Начало']), t.obj['Трасса'], t.obj['Стоимость заезда'] ? money(t.obj['Стоимость заезда']) + ' за заезд' : ''].filter(Boolean).join(' · ')) + '</div>' +
+        '<div class="badges">' + (t.cancelled ? '<span class="badge off">Отменено</span>' : '') + (t.obj['Тип'] ? '<span class="badge">' + esc(t.obj['Тип']) + '</span>' : '') + '</div></div>' +
+        '<div class="side">' + esc(t.id) + '<br>едут: ' + going.length + '</div></button>';
+    }).join('') || '<div class="empty">Ничего не найдено</div>') + '</div>';
+  }
+
+  function editTraining(id) {
+    const t = id ? trainings('Тренировки').find((x) => x.id === id) : null;
+    const o = t ? t.obj : { 'Тип': 'Тренировочные заезды', 'Статус': 'Запланировано' };
+    const going = t ? signups().filter((s) => s.training === t.id) : [];
+    const d = openDrawer(
+      '<h2>' + (t ? esc(t.title) : 'Новая тренировка') + '<button class="btn ghost small x" data-close>Закрыть</button></h2>' +
+      '<form id="f"><div class="grid">' +
+      field('ID *', input('ID', t ? t.id : '', 'required placeholder="Например, TR12"')) +
+      field('Тип', select('Тип', o['Тип'] || '', ['Школа', 'Тренировочные заезды'])) +
+      field('Название', input('Название', o['Название'] || '', 'placeholder="Если пусто — по типу"'), 'wide') +
+      field('Дата *', input('Дата', toIso(o['Дата']), 'type="date" required')) +
+      field('Статус', select('Статус', o['Статус'] || '', ['Запланировано', 'Отменено'])) +
+      field('Начало', input('Начало', toTime(o['Начало']), 'type="time"')) +
+      field('Окончание', input('Окончание', toTime(o['Окончание']), 'type="time"')) +
+      field('Трасса', input('Трасса', o['Трасса'] || '', 'list="tracks"') + datalist('tracks', tracks())) +
+      field('Адрес', input('Адрес', o['Адрес'] || '')) +
+      field('Стоимость заезда, ₽ *', input('Стоимость заезда', o['Стоимость заезда'] || '', 'required inputmode="decimal"')) +
+      '<div></div>' +
+      field('Мин. заездов', input('Мин. заездов', o['Мин. заездов'] || '', 'type="number" min="1" max="30" placeholder="1"')) +
+      field('Макс. заездов', input('Макс. заездов', o['Макс. заездов'] || '', 'type="number" min="1" max="30" placeholder="10"')) +
+      field('Описание', '<textarea class="input" name="Описание">' + esc(o['Описание'] || '') + '</textarea>', 'wide') +
+      '</div>' +
+      (t ? '<div class="box"><h3>Записались (' + going.length + ')</h3>' + (going.map((s, i) =>
+        '<div class="row-line"><span class="grow">' + esc(nameOf(s.obj['Пилот'])) + ' <span class="hint">· ' + esc(s.obj['Заездов']) + ' заезд.</span></span><button type="button" class="btn danger small" data-unsign="' + i + '">Убрать</button></div>').join('') || '<div class="hint">Пока никто не отметился.</div>') + '</div>' : '') +
+      '<div class="err" id="err"></div>' +
+      '<div class="actions">' + (t ? '<button type="button" class="btn danger" id="del">Удалить</button>' : '') + '<div class="spacer"></div><button type="button" class="btn ghost" data-close>Отмена</button><button class="btn" id="save">Сохранить</button></div></form>');
+    $$('[data-close]', d).forEach((x) => (x.onclick = closeDrawer));
+    $$('[data-unsign]', d).forEach((b) => (b.onclick = async () => {
+      const s = going[Number(b.dataset.unsign)];
+      if (await confirmBox('Убрать ' + nameOf(s.obj['Пилот']) + ' из записавшихся?', 'Убрать')) replace('Записи на тренировки', [s.raw], [], 'Запись убрана');
+    }));
+    $('#f', d).onsubmit = async (e) => {
+      e.preventDefault();
+      const v = formValues($('.grid', d));
+      const err = $('#err', d);
+      if (!v['ID'] || !v['Дата']) return (err.textContent = 'Укажите ID и дату.');
+      const min = Number(v['Мин. заездов'] || 1);
+      const max = Number(v['Макс. заездов'] || 10);
+      if (min > max) return (err.textContent = 'Минимум заездов больше максимума.');
+      const taken = trainings('Тренировки').concat(trainings('Архив тренировок')).some((x) => x.id === v['ID'] && (!t || x.id !== t.id));
+      if (taken) return (err.textContent = 'ID «' + v['ID'] + '» уже занят. Придумайте другой.');
+      $('#save', d).disabled = true;
+      const ok = await replace('Тренировки', t ? [t.raw] : [], [Object.assign({}, o, v, { 'Дата': fromIso(v['Дата']) })], 'Тренировка сохранена');
+      if (!ok && $('#save', d)) $('#save', d).disabled = false;
+    };
+    const del = $('#del', d);
+    if (del) del.onclick = async () => {
+      if (await confirmBox('Удалить тренировку «' + t.title + '»?')) replace('Тренировки', [t.raw], [], 'Тренировка удалена');
+    };
+  }
+
+  // ---- Люди ----
+  function peopleView() {
+    const list = people().map((p, i) => Object.assign(p, { i })).filter((p) => match([p.name, p.obj['Telegram'], p.obj['Telegram ID'], p.obj['Телефон']].join(' ')))
+      .sort((a, b) => (b.active - a.active) || a.name.localeCompare(b.name, 'ru'));
+    return '<h1>Люди</h1>' + toolbar('Человек') + '<div class="list">' + (list.map((p) =>
+      '<button class="item" data-person="' + p.i + '" style="' + (p.active ? '' : 'opacity:.55') + '"><div class="main"><div class="title">' + esc(p.name) + '</div>' +
+      '<div class="meta">' + esc([p.obj['Telegram'] ? '@' + p.obj['Telegram'] : '', p.obj['Telegram ID'] ? 'ID ' + p.obj['Telegram ID'] : '', p.obj['Телефон']].filter(Boolean).join(' · ')) + '</div>' +
+      '<div class="badges">' + (p.pilot ? '<span class="badge race">Пилот</span>' : '') + (p.manager ? '<span class="badge">Менеджер</span>' : '') + (p.lead ? '<span class="badge warn">Руководство</span>' : '') + (p.active ? '' : '<span class="badge off">Не активен</span>') + '</div></div></button>'
+    ).join('') || '<div class="empty">Ничего не найдено</div>') + '</div>';
+  }
+
+  function editPerson(i) {
+    const p = i == null ? null : people()[i];
+    const o = p ? p.obj : { 'Пилот': 'Да', 'Активен': 'Да' };
+    const d = openDrawer(
+      '<h2>' + (p ? esc(p.name) : 'Новый человек') + '<button class="btn ghost small x" data-close>Закрыть</button></h2>' +
+      '<form id="f"><div class="grid">' +
+      field('Имя *', input('Имя', o['Имя'] || '', 'required placeholder="Как показывать в приложении"'), 'wide') +
+      field('Ник в Telegram', input('Telegram', o['Telegram'] || '', 'placeholder="без @"')) +
+      field('Telegram ID', input('Telegram ID', o['Telegram ID'] || '', 'inputmode="numeric" placeholder="если нет ника"')) +
+      field('Телефон', input('Телефон', o['Телефон'] || '')) +
+      '<div></div>' +
+      '<div class="field wide"><label>Роли</label><div class="checks">' +
+      ['Пилот', 'Менеджер', 'Руководство'].map((r) => '<label class="check"><input type="checkbox" name="' + r + '"' + (yes(o[r]) ? ' checked' : '') + '>' + r + '</label>').join('') +
+      '<label class="check"><input type="checkbox" name="Активен"' + (String(o['Активен'] || '').trim().toLowerCase() !== 'нет' ? ' checked' : '') + '>Активен (есть доступ к приложению)</label></div></div>' +
+      '</div><div class="err" id="err"></div>' +
+      '<div class="actions">' + (p ? '<button type="button" class="btn danger" id="del">Удалить</button>' : '') + '<div class="spacer"></div><button type="button" class="btn ghost" data-close>Отмена</button><button class="btn" id="save">Сохранить</button></div></form>');
+    $$('[data-close]', d).forEach((x) => (x.onclick = closeDrawer));
+    $('#f', d).onsubmit = async (e) => {
+      e.preventDefault();
+      const v = formValues($('.grid', d));
+      const err = $('#err', d);
+      v['Telegram'] = v['Telegram'].replace(/^@/, '').replace(/^https?:\/\/t\.me\//i, '');
+      if (!v['Telegram'] && !v['Telegram ID']) return (err.textContent = 'Укажите ник в Telegram или Telegram ID.');
+      if (v['Telegram ID'] && !/^\d+$/.test(v['Telegram ID'])) return (err.textContent = 'Telegram ID — только цифры.');
+      const keys = [norm(v['Telegram']), norm(v['Telegram ID'])].filter(Boolean);
+      const dup = people().find((x, j) => j !== i && x.keys.some((k) => keys.indexOf(k) >= 0));
+      if (dup) return (err.textContent = 'Такой ник или ID уже есть у «' + dup.name + '».');
+      ['Пилот', 'Менеджер', 'Руководство', 'Активен'].forEach((r) => (v[r] = v[r] ? 'Да' : 'Нет'));
+      $('#save', d).disabled = true;
+      const ok = await replace('Люди', p ? [p.raw] : [], [Object.assign({}, o, v)], 'Сохранено');
+      if (!ok && $('#save', d)) $('#save', d).disabled = false;
+    };
+    const del = $('#del', d);
+    if (del) del.onclick = async () => {
+      if (await confirmBox('Удалить «' + p.name + '»? Чтобы просто закрыть доступ, лучше снять галочку «Активен».')) replace('Люди', [p.raw], [], 'Удалено');
+    };
+  }
+
+  // ---- Чемпионаты ----
+  function champsView() {
+    const list = objects('Чемпионаты').filter((x) => String(x.obj['Чемпионат'] || '').trim());
+    return '<h1>Чемпионаты</h1><div class="hint" style="margin:-6px 0 14px">Список для выбора в гонках. Переименование не меняет уже созданные гонки.</div>' +
+      toolbar('Чемпионат') + '<div class="list">' + (list.map((x, i) => match(x.obj['Чемпионат']) ?
+      '<div class="item static" data-ch="' + i + '"><div class="main"><input class="input" style="width:100%" value="' + esc(x.obj['Чемпионат']) + '" data-ch-name></div>' +
+      '<button class="btn ghost small" data-ch-save>Сохранить</button><button class="btn danger small" data-ch-del>Удалить</button></div>' : '').join('') || '<div class="empty">Пока пусто</div>') + '</div>';
+  }
+  function bindChamps() {
+    const list = objects('Чемпионаты').filter((x) => String(x.obj['Чемпионат'] || '').trim());
+    $$('[data-ch]').forEach((el) => {
+      const x = list[Number(el.dataset.ch)];
+      $('[data-ch-save]', el).onclick = () => {
+        const name = $('[data-ch-name]', el).value.trim();
+        if (name) replace('Чемпионаты', [x.raw], [Object.assign({}, x.obj, { 'Чемпионат': name })], 'Сохранено');
+      };
+      $('[data-ch-del]', el).onclick = async () => {
+        if (await confirmBox('Удалить «' + x.obj['Чемпионат'] + '» из списка?')) replace('Чемпионаты', [x.raw], [], 'Удалено');
+      };
+    });
+  }
+  function addChamp() {
+    const d = openDrawer('<h2>Новый чемпионат<button class="btn ghost small x" data-close>Закрыть</button></h2><form id="f">' +
+      field('Название *', input('Чемпионат', '', 'required autofocus')) + '<div class="err" id="err"></div>' +
+      '<div class="actions"><div class="spacer"></div><button type="button" class="btn ghost" data-close>Отмена</button><button class="btn">Добавить</button></div></form>');
+    $$('[data-close]', d).forEach((x) => (x.onclick = closeDrawer));
+    $('#f', d).onsubmit = (e) => {
+      e.preventDefault();
+      const v = formValues(d);
+      if (championships().indexOf(v['Чемпионат']) >= 0) return ($('#err', d).textContent = 'Такой уже есть.');
+      replace('Чемпионаты', [], [v], 'Добавлено');
+    };
+  }
+
+  // ---- Заработок ----
+  function incomeView() {
+    const ev = new Map(groupEvents('События').concat(groupEvents('Архив событий')).map((g) => [g.id, g]));
+    const list = objects('Заработок').map((x, i) => Object.assign(x, { i })).filter((x) => match([nameOf(x.obj['Менеджер']), x.obj['ID гонки'], x.obj['Комментарий']].join(' ')));
+    list.sort((a, b) => (String(a.obj['Дата записи']) < String(b.obj['Дата записи']) ? 1 : -1));
+    return '<h1>Заработок менеджеров</h1><div class="hint" style="margin:-6px 0 14px">Менеджеры вносят суммы сами в приложении. Здесь можно убрать ошибочную запись.</div>' +
+      toolbar('') + '<div class="list">' + (list.map((x) => {
+        const g = ev.get(String(x.obj['ID гонки'] || '').trim());
+        return '<div class="item static"><div class="main"><div class="title">' + esc(nameOf(x.obj['Менеджер'])) + ' — ' + esc(money(x.obj['Сумма'])) + '</div>' +
+          '<div class="meta">' + esc([g ? g.title : x.obj['ID гонки'], String(x.obj['Дата записи'] || '').slice(0, 10), x.obj['Комментарий']].filter(Boolean).join(' · ')) + '</div></div>' +
+          '<button class="btn danger small" data-inc="' + x.i + '">Удалить</button></div>';
+      }).join('') || '<div class="empty">Записей нет</div>') + '</div>';
+  }
+  function bindIncome() {
+    const rows = objects('Заработок');
+    $$('[data-inc]').forEach((b) => (b.onclick = async () => {
+      const x = rows[Number(b.dataset.inc)];
+      if (await confirmBox('Удалить запись ' + nameOf(x.obj['Менеджер']) + ' на ' + money(x.obj['Сумма']) + '?')) replace('Заработок', [x.raw], [], 'Удалено');
+    }));
+  }
+
+  // ---- Архив ----
+  function archiveView() {
+    const ev = groupEvents('Архив событий').filter((g) => match(g.id + ' ' + g.title));
+    const tr = trainings('Архив тренировок').filter((t) => match(t.id + ' ' + t.title));
+    const sort = (a, b) => (a.date < b.date ? 1 : -1);
+    const item = (x, kind) => '<div class="item static"><div class="main"><div class="title">' + esc(x.title) + '</div><div class="meta">' + esc(fmtDate(x.date)) + ' · ' + kind + ' · ' + esc(x.id) + '</div></div></div>';
+    return '<h1>Архив</h1><div class="hint" style="margin:-6px 0 14px">Сюда скрипт сам переносит гонки и тренировки, прошедшие больше недели назад. Они остаются в «Прошедших» и в финансах приложения.</div>' +
+      toolbar('') + '<div class="box"><h3>Гонки (' + ev.length + ')</h3>' + (ev.sort(sort).map((g) => item(g, 'гонка')).join('') || '<div class="hint">Пусто</div>') + '</div>' +
+      '<div class="box"><h3>Тренировки (' + tr.length + ')</h3>' + (tr.sort(sort).map((t) => item(t, 'тренировка')).join('') || '<div class="hint">Пусто</div>') + '</div>';
+  }
+
+  $('#reload').onclick = () => { load(); toast('Обновлено'); };
+  load();
+})();
+</script>
+</body>
+</html>
