@@ -208,3 +208,4 @@ main { padding: 12px 16px 32px; }
 .hhmm select { font: inherit; font-weight: 600; background: var(--bg2); color: var(--text); border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; }
 .set-warn { color: var(--orange); margin-top: 6px; }
 .cal:disabled { opacity: .5; }
+.set-sub { font-size: 13px; color: var(--hint); font-weight: 600; text-transform: uppercase; letter-spacing: .03em; margin: 16px 2px 4px; }

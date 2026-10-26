@@ -732,6 +732,32 @@
     bindTrainings();
   }
 
+  // ---- Режим руководителя ----
+  // Руководство видит все гонки команды; режим можно выключить и смотреть только свои.
+  // Выбор хранится на устройстве и сразу меняет списки.
+  const LEADER_KEY = 'leader_mode';
+  let leaderMode = true;
+  try {
+    leaderMode = localStorage.getItem(LEADER_KEY) !== 'off';
+  } catch (e) {}
+  const isLeader = () => !!(view && view.me && view.me.roles.leadership);
+  const myEvents = () => (isLeader() && !leaderMode ? view.events.filter((e) => (e.myRoles || []).length) : view.events);
+
+  function leaderBlock() {
+    if (!isLeader()) return '';
+    return `<div class="section">
+      <div class="set-row">
+        <span class="set-title">Режим руководителя</span>
+        <label class="switch"><input type="checkbox" data-leader ${leaderMode ? 'checked' : ''}><span></span></label>
+      </div>
+      <div class="small" style="margin-top:8px">${
+        leaderMode
+          ? 'Включён: видны все гонки команды.'
+          : 'Выключен: видны только гонки, где вы пилот или менеджер.'
+      } Меняется сразу, сохранять не нужно.</div>
+    </div>`;
+  }
+
   // ---- Настройки: напоминания от бота ----
   let draft = null; // редактируемые настройки до сохранения
   const pad2 = (n) => String(n).padStart(2, '0');
@@ -795,6 +821,8 @@
     app.innerHTML = `
       ${tg ? '' : '<button class="back">‹ Назад</button>'}
       <h2 class="page-title">Настройки</h2>
+      ${leaderBlock()}
+      ${isLeader() ? '<h3 class="set-sub">Напоминания</h3>' : ''}
       <div class="small" style="margin:0 2px 10px">Бот пришлёт напоминание в чат перед началом ваших гонок и тренировок, на которые вы отметились.</div>
       ${settingsBlock('races', 'Напоминания о гонках')}
       ${settingsBlock('trainings', 'Напоминания о тренировках')}
@@ -803,6 +831,15 @@
     `;
     const back = app.querySelector('.back');
     if (back) back.addEventListener('click', closeSettings);
+    const leader = app.querySelector('[data-leader]');
+    if (leader)
+      leader.addEventListener('change', () => {
+        leaderMode = leader.checked;
+        try {
+          localStorage.setItem(LEADER_KEY, leaderMode ? 'on' : 'off');
+        } catch (e) {}
+        renderSettings();
+      });
     app.querySelectorAll('[data-on]').forEach((b) =>
       b.addEventListener('change', () => {
         draft[b.dataset.on].on = b.checked;
@@ -891,11 +928,12 @@
     setBack(null);
 
     // Чемпионаты из событий человека; выбор, которого больше нет, игнорируется.
-    const champs = [...new Set(view.events.map(champKey))].sort((a, b) =>
+    const events = myEvents();
+    const champs = [...new Set(events.map(champKey))].sort((a, b) =>
       a === NO_CHAMP ? 1 : b === NO_CHAMP ? -1 : a.localeCompare(b, 'ru'),
     );
     const active = champFilter.filter((c) => champs.includes(c));
-    const shown = active.length ? view.events.filter((e) => active.includes(champKey(e))) : view.events;
+    const shown = active.length ? events.filter((e) => active.includes(champKey(e))) : events;
 
     const chips =
       champs.length > 1 || (champs.length === 1 && champs[0] !== NO_CHAMP)
