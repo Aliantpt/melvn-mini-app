@@ -394,6 +394,124 @@ export function staleIds(items, todayIso, days) {
   return new Set(items.filter((e) => isoDate(e.date) < cutoff).map((e) => e.id));
 }
 
+// ---- Напоминания ----
+// Настройки человека хранятся на листе «Настройки уведомлений», по строке на человека.
+// «За сколько»: «2 дн» (за N дней) или «01:30» (за чч:мм до начала).
+export const DEFAULT_LEAD = { races: '1 дн', trainings: '02:00' };
+
+export function parseLead(v) {
+  const s = String(v ?? '').trim().toLowerCase();
+  let m = s.match(/^(\d{1,2})\s*д/);
+  if (m) {
+    const days = +m[1];
+    return days >= 1 && days <= 30 ? { mode: 'days', days, minutes: days * 1440, text: `${days} дн` } : null;
+  }
+  m = s.match(/^(\d{1,2}):(\d{2})(?::\d{2})?$/);
+  if (m) {
+    const h = +m[1];
+    const min = +m[2];
+    if (h > 23 || min > 59 || h * 60 + min < 5) return null;
+    return { mode: 'time', h, min, minutes: h * 60 + min, text: `${pad(h)}:${pad(min)}` };
+  }
+  return null;
+}
+
+export function findSettings(rows, person) {
+  let found = null;
+  for (const r of rows || []) {
+    if (person.keys.includes(normHandle(r['Пользователь']))) found = r;
+  }
+  const part = (on, lead, def) => ({ on: isYes(on), lead: (parseLead(lead) || parseLead(def)).text });
+  return {
+    races: part(found && found['Гонки'], found && found['Гонки за'], DEFAULT_LEAD.races),
+    trainings: part(found && found['Тренировки'], found && found['Тренировки за'], DEFAULT_LEAD.trainings),
+    chatId: found ? String(found['Telegram ID'] || '').trim() : '',
+  };
+}
+
+// Начало события в миллисекундах. Время — московское (UTC+3, без перехода на летнее);
+// если время не указано, считаем от 09:00.
+export function startMs(date, start) {
+  const t = start || { h: 9, min: 0 };
+  return Date.UTC(date.y, date.m - 1, date.d, t.h - 3, t.min);
+}
+
+const MONTHS_GEN = ['января', 'февраля', 'марта', 'апреля', 'мая', 'июня', 'июля', 'августа', 'сентября', 'октября', 'ноября', 'декабря'];
+const WEEKDAYS_SHORT = ['вс', 'пн', 'вт', 'ср', 'чт', 'пт', 'сб'];
+const html = (s) => String(s ?? '').replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+
+function untilText(ms) {
+  const mins = Math.max(0, Math.round(ms / 60000));
+  if (mins >= 1440) {
+    const d = Math.round(mins / 1440);
+    return `${d} ${d % 10 === 1 && d % 100 !== 11 ? 'день' : [2, 3, 4].includes(d % 10) && ![12, 13, 14].includes(d % 100) ? 'дня' : 'дней'}`;
+  }
+  const h = Math.floor(mins / 60);
+  const m = mins % 60;
+  return [h ? `${h} ч` : '', m ? `${m} мин` : ''].filter(Boolean).join(' ') || 'несколько минут';
+}
+
+function reminderText(item, nowMs) {
+  const d = item.date;
+  const wd = WEEKDAYS_SHORT[new Date(Date.UTC(d.y, d.m - 1, d.d)).getUTCDay()];
+  const time = item.start ? ` · ${pad(item.start.h)}:${pad(item.start.min)}` : '';
+  const lines = [
+    `⏰ <b>${item.category === 'races' ? 'Скоро гонка' : 'Скоро тренировка'}</b> — через ${untilText(item.at - nowMs)}`,
+    '',
+    `<b>${html(item.title)}</b>`,
+    `${d.d} ${MONTHS_GEN[d.m - 1]}, ${wd}${time}`,
+  ];
+  if (item.track) lines.push(`Трасса: ${html(item.track)}`);
+  if (item.role) lines.push(html(item.role));
+  return lines.join('\n');
+}
+
+// Какие напоминания пора отправить. `sent` — ключи уже отправленных.
+export function dueReminders(data, nowMs, sent) {
+  const people = buildPeople(data['Люди']).filter((p) => p.active);
+  const events = buildEvents(data['События']);
+  const trainings = buildTrainings(data['Тренировки']);
+  const signups = buildSignups(data['Записи на тренировки']);
+  const out = [];
+  const seenPeople = new Set();
+  for (const p of people) {
+    if (seenPeople.has(p.key)) continue;
+    seenPeople.add(p.key);
+    const st = findSettings(data['Настройки уведомлений'], p);
+    if (!/^\d+$/.test(st.chatId) || (!st.races.on && !st.trainings.on)) continue;
+
+    const items = [];
+    for (const e of events) {
+      if (e.cancelled) continue;
+      const crew = e.crews.find((c) => inCrew(c, p));
+      if (!crew) continue;
+      const roles = [listsPerson(crew.pilots, p) && 'пилот', listsPerson(crew.managers, p) && 'менеджер'].filter(Boolean).join(', ');
+      items.push({
+        ...e,
+        category: /трен/i.test(e.type) ? 'trainings' : 'races',
+        role: `Вы: ${roles}${crew.name ? ` (${crew.name})` : ''}`,
+      });
+    }
+    for (const t of trainings) {
+      if (t.cancelled) continue;
+      const s = signups.find((x) => x.trainingId === t.id && p.keys.includes(x.pilot));
+      if (s) items.push({ ...t, category: 'trainings', role: `Вы едете: ${s.laps} ${lapsWord(s.laps)}` });
+    }
+
+    for (const it of items) {
+      const conf = st[it.category];
+      if (!conf.on) continue;
+      const lead = parseLead(conf.lead);
+      const at = startMs(it.date, it.start);
+      if (nowMs < at - lead.minutes * 60000 || nowMs >= at) continue;
+      const key = [p.key, it.category, it.id, at, lead.minutes].join('|');
+      if (sent.has(key)) continue;
+      out.push({ chatId: st.chatId, key, text: reminderText({ ...it, at }, nowMs) });
+    }
+  }
+  return out;
+}
+
 // Сборка ответа для экрана приложения.
 export function buildView(data, tgUser, timezone) {
   const allEvents = eventsWithArchive(data);
@@ -492,6 +610,7 @@ export function buildView(data, tgUser, timezone) {
     me: { name: person.name, roles: person.roles },
     events,
     trainings: openTrainings,
+    settings: (({ races, trainings: tr }) => ({ races, trainings: tr }))(findSettings(data['Настройки уведомлений'], person)),
     finance: {
       spent: [...buildSpent(allEvents, person), ...buildTrainingSpent(trainings, signups, person)],
       earned: buildEarned(allEvents, person, data['Заработок']),

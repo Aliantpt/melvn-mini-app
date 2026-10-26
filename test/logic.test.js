@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 import { createHmac } from 'node:crypto';
-import { buildView, googleCalendarUrl, buildEvents, parseDate, parseMoney } from '../src/logic.js';
+import { buildView, googleCalendarUrl, buildEvents, parseDate, parseMoney, dueReminders, parseLead } from '../src/logic.js';
 
 const data = {
   'Люди': [
@@ -177,6 +177,7 @@ test('earned: only my income rows; managers get the form with their races', () =
 function loadGas(botToken, sheets, today = '2026-10-25') {
   const cache = {};
   const props = {};
+  const fetched = [];
   const code = readFileSync(new URL('../dist/Code.gs', import.meta.url), 'utf8');
   const signed = (buf) => [...buf].map((b) => (b > 127 ? b - 256 : b));
   const unsigned = (arr) => Buffer.from(arr.map((b) => (b + 256) % 256));
@@ -204,14 +205,16 @@ function loadGas(botToken, sheets, today = '2026-10-25') {
     },
     LockService: { getScriptLock: () => ({ waitLock() {}, tryLock: () => true, releaseLock() {} }) },
     CacheService: { getScriptCache: () => ({ get: (k) => cache[k] ?? null, put: (k, v) => (cache[k] = v) }) },
-    console: { error() {} },
+    console: { error() {}, log() {} },
+    UrlFetchApp: { fetch: (url, opt) => (fetched.push({ url, body: JSON.parse(opt.payload) }), { getResponseCode: () => 200 }) },
   };
   let uuid = 0;
   ctx.Utilities.getUuid = () => 'id' + ++uuid;
   function sheetApi(name) {
     return {
       getDataRange: () => ({
-        getDisplayValues: () => sheets[name].map((r) => r.map(String)),
+        // Как в Google Таблицах: апостроф в начале не показывается.
+        getDisplayValues: () => sheets[name].map((r) => r.map((v) => String(v).replace(/^'/, ''))),
         getValues: () => sheets[name].map((r) => r.slice()),
       }),
       appendRow: (row) => sheets[name].push(row),
@@ -230,7 +233,10 @@ function loadGas(botToken, sheets, today = '2026-10-25') {
   }
   vm.createContext(ctx);
   vm.runInContext(code, ctx);
-  return (params) => JSON.parse(ctx.doGet({ parameter: params }).text);
+  const doGet = (params) => JSON.parse(ctx.doGet({ parameter: params }).text);
+  doGet.ctx = ctx;
+  doGet.fetched = fetched;
+  return doGet;
 }
 
 function signInitData(botToken, user, authDate = Math.floor(Date.now() / 1000)) {
@@ -423,4 +429,59 @@ test('Apps Script: recent races stay on the main sheet', () => {
   doGet({ initData: signInitData('123:ABC', { id: 42, username: 'ivan_petrov' }).toString() });
   assert.ok(sheets['События'].some((r) => r[0] === 'R1'));
   assert.ok(!(sheets['Архив событий'] || []).some((r) => r[0] === 'R1'));
+});
+
+test('reminder lead: days or hh:mm, with limits', () => {
+  assert.equal(parseLead('2 дн').minutes, 2880);
+  assert.equal(parseLead('01:30').minutes, 90);
+  assert.equal(parseLead('1:30:00').text, '01:30');
+  assert.equal(parseLead('00:01'), null);
+  assert.equal(parseLead('31 дн'), null);
+  assert.equal(parseLead('=1'), null);
+});
+
+test('reminders: due ones for my races and signed trainings, once', () => {
+  const d = { ...data,
+    'Тренировки': [{ ID: 'T1', 'Дата': '15.11.2026', 'Начало': '18:00', 'Трасса': 'PitStop' }],
+    'Записи на тренировки': [{ 'Пилот': 'ivan_petrov', 'ID тренировки': 'T1', 'Заездов': '3' }],
+    'Настройки уведомлений': [{ 'Telegram ID': '42', 'Пользователь': 'ivan_petrov', 'Гонки': 'Да', 'Гонки за': '1 дн', 'Тренировки': 'Да', 'Тренировки за': '01:00' }] };
+  // R1: 15.11.2026 10:00 МСК = 07:00 UTC.
+  const at = (iso) => Date.parse(iso);
+  assert.deepEqual(dueReminders(d, at('2026-11-14T06:59:00Z'), new Set()), []);
+  const due = dueReminders(d, at('2026-11-14T07:00:00Z'), new Set());
+  assert.equal(due.length, 1);
+  assert.equal(due[0].chatId, '42');
+  assert.match(due[0].text, /Скоро гонка<\/b> — через 1 день/);
+  assert.match(due[0].text, /Вы: пилот \(M-ELVN Orange\)/);
+  assert.deepEqual(dueReminders(d, at('2026-11-14T08:00:00Z'), new Set([due[0].key])), []);
+  // Тренировка 18:00 МСК = 15:00 UTC, напоминание за час.
+  const tr = dueReminders(d, at('2026-11-15T14:10:00Z'), new Set([due[0].key]));
+  assert.equal(tr.length, 1);
+  assert.match(tr[0].text, /Скоро тренировка<\/b> — через 50 мин/);
+  assert.match(tr[0].text, /Вы едете: 3 заезда/);
+  // После начала — ничего; выключено — ничего.
+  assert.deepEqual(dueReminders(d, at('2026-11-15T15:00:00Z'), new Set()), []);
+  const off = { ...d, 'Настройки уведомлений': [{ ...d['Настройки уведомлений'][0], 'Гонки': 'Нет', 'Тренировки': 'Нет' }] };
+  assert.deepEqual(dueReminders(off, at('2026-11-14T07:00:00Z'), new Set()), []);
+});
+
+test('Apps Script: settings are saved per person and reminders are sent once', () => {
+  const sheets = JSON.parse(JSON.stringify(gasSheets));
+  const doGet = loadGas('123:ABC', sheets);
+  const initData = signInitData('123:ABC', { id: 42, username: 'ivan_petrov' }).toString();
+  let v = doGet({ initData });
+  assert.deepEqual(v.settings, { races: { on: false, lead: '1 дн' }, trainings: { on: false, lead: '02:00' } });
+  assert.equal(doGet({ initData, action: 'saveSettings', racesOn: '1', racesLead: '=2', trainingsOn: '0', trainingsLead: '02:00' }).error, 'bad_lead');
+  doGet({ initData, action: 'saveSettings', racesOn: '1', racesLead: '3 дн', trainingsOn: '0', trainingsLead: '02:00' });
+  v = doGet({ initData, action: 'saveSettings', racesOn: '1', racesLead: '2 дн', trainingsOn: '1', trainingsLead: '00:30' });
+  assert.deepEqual(v.settings, { races: { on: true, lead: '2 дн' }, trainings: { on: true, lead: '00:30' } });
+  assert.equal(sheets['Настройки уведомлений'].length, 3);
+
+  vm.runInContext("Date.now = () => Date.parse('2026-11-13T08:00:00Z')", doGet.ctx);
+  doGet.ctx.sendReminders();
+  doGet.ctx.sendReminders();
+  assert.equal(doGet.fetched.length, 1);
+  assert.match(doGet.fetched[0].url, /\/bot123:ABC\/sendMessage$/);
+  assert.equal(doGet.fetched[0].body.chat_id, '42');
+  assert.equal(doGet.fetched[0].body.reply_markup.inline_keyboard[0][0].web_app.url, 'https://aliantpt.github.io/melvn-mini-app/');
 });

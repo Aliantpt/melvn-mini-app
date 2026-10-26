@@ -7,6 +7,8 @@
 // Запись дохода менеджером: те же параметры + action=addIncome&raceId=&amount=&note=
 // Удаление своей записи: action=deleteIncome&id=
 // Запись на тренировку: action=signTraining&trainingId=&laps=; отказ: action=unsignTraining&trainingId=
+// Настройки напоминаний: action=saveSettings&racesOn=1&racesLead=1 дн&trainingsOn=0&trainingsLead=02:00
+// Напоминания рассылает sendReminders() по таймеру; включается один раз запуском setupReminders().
 
 // Токен бота хранится в свойствах скрипта (Настройки проекта → Свойства скрипта → BOT_TOKEN),
 // чтобы при обновлении кода его не нужно было вписывать заново.
@@ -15,7 +17,13 @@ function botToken() {
 }
 
 const TIMEZONE = 'Europe/Moscow';
-const SHEETS = ['Люди', 'События', 'Заработок', 'Тренировки', 'Записи на тренировки', 'Архив событий', 'Архив тренировок'];
+const SHEETS = ['Люди', 'События', 'Заработок', 'Тренировки', 'Записи на тренировки', 'Архив событий', 'Архив тренировок', 'Настройки уведомлений'];
+const APP_URL = 'https://aliantpt.github.io/melvn-mini-app/';
+const SETTINGS_SHEET = 'Настройки уведомлений';
+const SETTINGS_HEADERS = ['Telegram ID', 'Пользователь', 'Гонки', 'Гонки за', 'Тренировки', 'Тренировки за', 'Обновлено'];
+const SETTINGS_HINTS = ['Заполняется из приложения', 'Ник или ID', 'Да / Нет', 'N дн или чч:мм', 'Да / Нет', 'N дн или чч:мм', ''];
+const LOG_SHEET = 'Журнал уведомлений';
+const MAX_SENDS_PER_RUN = 50;
 const INCOME_SHEET = 'Заработок';
 const INCOME_HEADERS = ['ID', 'Дата записи', 'Менеджер', 'ID гонки', 'Сумма', 'Комментарий'];
 const INCOME_HINTS = ['Заполняется из приложения', 'Не редактировать вручную без нужды', 'Ник или ID', 'ID из «Событий»', 'Рубли', ''];
@@ -46,6 +54,10 @@ function doGet(e) {
     const action = e.parameter.action || '';
     if (action === 'addIncome' || action === 'deleteIncome') {
       const result = changeIncome(action, e.parameter, user);
+      if (result) return jsonOut(result);
+    }
+    if (action === 'saveSettings') {
+      const result = saveSettings(e.parameter, user);
       if (result) return jsonOut(result);
     }
     if (action === 'signTraining' || action === 'unsignTraining') {
@@ -162,6 +174,86 @@ function changeSignup(action, p, user) {
   } finally {
     lock.releaseLock();
   }
+}
+
+// Настройки напоминаний человека: одна строка на человека, новая заменяет старую.
+function saveSettings(p, user) {
+  const lock = LockService.getScriptLock();
+  lock.waitLock(10000);
+  try {
+    const data = readSheets();
+    const person = findPerson(buildPeople(data['Люди']), user);
+    if (!person || !person.active) return { error: 'no_access' };
+    const racesLead = parseLead(p.racesLead);
+    const trainingsLead = parseLead(p.trainingsLead);
+    if (!racesLead || !trainingsLead) return { error: 'bad_lead' };
+    if (!allowWrite(person.key)) return { error: 'too_many' };
+    const sh = ensureSheet(SETTINGS_SHEET, SETTINGS_HEADERS, SETTINGS_HINTS);
+    const values = sh.getDataRange().getDisplayValues();
+    for (let i = values.length - 1; i >= 2; i--) {
+      if (person.keys.includes(normHandle(values[i][1]))) sh.deleteRow(i + 1);
+    }
+    // Апостроф — чтобы таблица не превратила «01:30» во время, а ID в число.
+    sh.appendRow([
+      "'" + String(Number(user.id) || ''),
+      safeCell(person.key),
+      p.racesOn === '1' ? 'Да' : 'Нет',
+      "'" + racesLead.text,
+      p.trainingsOn === '1' ? 'Да' : 'Нет',
+      "'" + trainingsLead.text,
+      new Date().toISOString(),
+    ]);
+    return null;
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+// Запускается таймером каждые 5 минут и отправляет напоминания, которым пора.
+function sendReminders() {
+  const token = botToken();
+  if (!token) return;
+  const lock = LockService.getScriptLock();
+  if (!lock.tryLock(5000)) return;
+  try {
+    const data = readSheets();
+    const log = ensureSheet(LOG_SHEET, ['Ключ', 'Отправлено'], ['Служебный лист: какие напоминания уже отправлены', '']);
+    const logged = log.getDataRange().getDisplayValues();
+    const sent = new Set(logged.slice(2).map(function (r) { return r[0]; }));
+    const due = dueReminders(data, Date.now(), sent).slice(0, MAX_SENDS_PER_RUN);
+    due.forEach(function (r) {
+      const res = UrlFetchApp.fetch('https://api.telegram.org/bot' + token + '/sendMessage', {
+        method: 'post',
+        contentType: 'application/json',
+        muteHttpExceptions: true,
+        payload: JSON.stringify({
+          chat_id: r.chatId,
+          text: r.text,
+          parse_mode: 'HTML',
+          reply_markup: { inline_keyboard: [[{ text: 'Открыть приложение', web_app: { url: APP_URL } }]] },
+        }),
+      });
+      // Если человек запретил боту писать, повторять не будем — запись в журнал всё равно.
+      if (res.getResponseCode() !== 200) console.error('sendMessage ' + res.getResponseCode() + ' для ' + r.key);
+      log.appendRow([safeCell(r.key), new Date().toISOString()]);
+    });
+    // Журнал не растёт бесконечно: старые записи удаляются.
+    if (logged.length > 3000) log.deleteRows(3, logged.length - 2000);
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+// Запустите один раз в редакторе Apps Script (выбрать функцию → «Выполнить»):
+// разрешит боту отправлять сообщения и включит таймер напоминаний.
+function setupReminders() {
+  ScriptApp.getProjectTriggers().forEach(function (t) {
+    if (t.getHandlerFunction() === 'sendReminders') ScriptApp.deleteTrigger(t);
+  });
+  ScriptApp.newTrigger('sendReminders').timeBased().everyMinutes(5).create();
+  ensureSheet(SETTINGS_SHEET, SETTINGS_HEADERS, SETTINGS_HINTS);
+  sendReminders();
+  console.log('Напоминания включены: проверка каждые 5 минут.');
 }
 
 // Раз в день: гонки и тренировки, прошедшие больше недели назад, переезжают
@@ -683,6 +775,124 @@ function staleIds(items, todayIso, days) {
   return new Set(items.filter((e) => isoDate(e.date) < cutoff).map((e) => e.id));
 }
 
+// ---- Напоминания ----
+// Настройки человека хранятся на листе «Настройки уведомлений», по строке на человека.
+// «За сколько»: «2 дн» (за N дней) или «01:30» (за чч:мм до начала).
+const DEFAULT_LEAD = { races: '1 дн', trainings: '02:00' };
+
+function parseLead(v) {
+  const s = String(v ?? '').trim().toLowerCase();
+  let m = s.match(/^(\d{1,2})\s*д/);
+  if (m) {
+    const days = +m[1];
+    return days >= 1 && days <= 30 ? { mode: 'days', days, minutes: days * 1440, text: `${days} дн` } : null;
+  }
+  m = s.match(/^(\d{1,2}):(\d{2})(?::\d{2})?$/);
+  if (m) {
+    const h = +m[1];
+    const min = +m[2];
+    if (h > 23 || min > 59 || h * 60 + min < 5) return null;
+    return { mode: 'time', h, min, minutes: h * 60 + min, text: `${pad(h)}:${pad(min)}` };
+  }
+  return null;
+}
+
+function findSettings(rows, person) {
+  let found = null;
+  for (const r of rows || []) {
+    if (person.keys.includes(normHandle(r['Пользователь']))) found = r;
+  }
+  const part = (on, lead, def) => ({ on: isYes(on), lead: (parseLead(lead) || parseLead(def)).text });
+  return {
+    races: part(found && found['Гонки'], found && found['Гонки за'], DEFAULT_LEAD.races),
+    trainings: part(found && found['Тренировки'], found && found['Тренировки за'], DEFAULT_LEAD.trainings),
+    chatId: found ? String(found['Telegram ID'] || '').trim() : '',
+  };
+}
+
+// Начало события в миллисекундах. Время — московское (UTC+3, без перехода на летнее);
+// если время не указано, считаем от 09:00.
+function startMs(date, start) {
+  const t = start || { h: 9, min: 0 };
+  return Date.UTC(date.y, date.m - 1, date.d, t.h - 3, t.min);
+}
+
+const MONTHS_GEN = ['января', 'февраля', 'марта', 'апреля', 'мая', 'июня', 'июля', 'августа', 'сентября', 'октября', 'ноября', 'декабря'];
+const WEEKDAYS_SHORT = ['вс', 'пн', 'вт', 'ср', 'чт', 'пт', 'сб'];
+const html = (s) => String(s ?? '').replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+
+function untilText(ms) {
+  const mins = Math.max(0, Math.round(ms / 60000));
+  if (mins >= 1440) {
+    const d = Math.round(mins / 1440);
+    return `${d} ${d % 10 === 1 && d % 100 !== 11 ? 'день' : [2, 3, 4].includes(d % 10) && ![12, 13, 14].includes(d % 100) ? 'дня' : 'дней'}`;
+  }
+  const h = Math.floor(mins / 60);
+  const m = mins % 60;
+  return [h ? `${h} ч` : '', m ? `${m} мин` : ''].filter(Boolean).join(' ') || 'несколько минут';
+}
+
+function reminderText(item, nowMs) {
+  const d = item.date;
+  const wd = WEEKDAYS_SHORT[new Date(Date.UTC(d.y, d.m - 1, d.d)).getUTCDay()];
+  const time = item.start ? ` · ${pad(item.start.h)}:${pad(item.start.min)}` : '';
+  const lines = [
+    `⏰ <b>${item.category === 'races' ? 'Скоро гонка' : 'Скоро тренировка'}</b> — через ${untilText(item.at - nowMs)}`,
+    '',
+    `<b>${html(item.title)}</b>`,
+    `${d.d} ${MONTHS_GEN[d.m - 1]}, ${wd}${time}`,
+  ];
+  if (item.track) lines.push(`Трасса: ${html(item.track)}`);
+  if (item.role) lines.push(html(item.role));
+  return lines.join('\n');
+}
+
+// Какие напоминания пора отправить. `sent` — ключи уже отправленных.
+function dueReminders(data, nowMs, sent) {
+  const people = buildPeople(data['Люди']).filter((p) => p.active);
+  const events = buildEvents(data['События']);
+  const trainings = buildTrainings(data['Тренировки']);
+  const signups = buildSignups(data['Записи на тренировки']);
+  const out = [];
+  const seenPeople = new Set();
+  for (const p of people) {
+    if (seenPeople.has(p.key)) continue;
+    seenPeople.add(p.key);
+    const st = findSettings(data['Настройки уведомлений'], p);
+    if (!/^\d+$/.test(st.chatId) || (!st.races.on && !st.trainings.on)) continue;
+
+    const items = [];
+    for (const e of events) {
+      if (e.cancelled) continue;
+      const crew = e.crews.find((c) => inCrew(c, p));
+      if (!crew) continue;
+      const roles = [listsPerson(crew.pilots, p) && 'пилот', listsPerson(crew.managers, p) && 'менеджер'].filter(Boolean).join(', ');
+      items.push({
+        ...e,
+        category: /трен/i.test(e.type) ? 'trainings' : 'races',
+        role: `Вы: ${roles}${crew.name ? ` (${crew.name})` : ''}`,
+      });
+    }
+    for (const t of trainings) {
+      if (t.cancelled) continue;
+      const s = signups.find((x) => x.trainingId === t.id && p.keys.includes(x.pilot));
+      if (s) items.push({ ...t, category: 'trainings', role: `Вы едете: ${s.laps} ${lapsWord(s.laps)}` });
+    }
+
+    for (const it of items) {
+      const conf = st[it.category];
+      if (!conf.on) continue;
+      const lead = parseLead(conf.lead);
+      const at = startMs(it.date, it.start);
+      if (nowMs < at - lead.minutes * 60000 || nowMs >= at) continue;
+      const key = [p.key, it.category, it.id, at, lead.minutes].join('|');
+      if (sent.has(key)) continue;
+      out.push({ chatId: st.chatId, key, text: reminderText({ ...it, at }, nowMs) });
+    }
+  }
+  return out;
+}
+
 // Сборка ответа для экрана приложения.
 function buildView(data, tgUser, timezone) {
   const allEvents = eventsWithArchive(data);
@@ -781,6 +991,7 @@ function buildView(data, tgUser, timezone) {
     me: { name: person.name, roles: person.roles },
     events,
     trainings: openTrainings,
+    settings: (({ races, trainings: tr }) => ({ races, trainings: tr }))(findSettings(data['Настройки уведомлений'], person)),
     finance: {
       spent: [...buildSpent(allEvents, person), ...buildTrainingSpent(trainings, signups, person)],
       earned: buildEarned(allEvents, person, data['Заработок']),

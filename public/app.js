@@ -94,6 +94,18 @@
   }
   showSplash();
 
+  // Кнопка «Назад» Telegram: одновременно действует только один обработчик.
+  let backHandler = null;
+  function setBack(fn) {
+    if (!tg) return;
+    if (backHandler) tg.BackButton.offClick(backHandler);
+    backHandler = fn;
+    if (fn) {
+      tg.BackButton.onClick(fn);
+      tg.BackButton.show();
+    } else tg.BackButton.hide();
+  }
+
   function state(title, text) {
     app.innerHTML = `<div class="state"><b>${esc(title)}</b>${text}</div>`;
   }
@@ -673,7 +685,6 @@
   function closeTraining() {
     trDetail = null;
     trPick = null;
-    if (tg) tg.BackButton.offClick(closeTraining);
     renderList();
   }
 
@@ -681,12 +692,7 @@
     const t = view.trainings.find((x) => x.id === id);
     if (!t) return closeTraining();
     trDetail = id;
-    if (tg) {
-      tg.BackButton.show();
-      tg.BackButton.offClick(renderList);
-      tg.BackButton.offClick(closeTraining);
-      tg.BackButton.onClick(closeTraining);
-    }
+    setBack(closeTraining);
     const kv = (k, v) => (v ? `<div class="kv"><span>${esc(k)}</span><span>${v}</span></div>` : '');
     const going = t.going.length
       ? t.going.map((p) => personLine(p, ` · ${p.laps} ${lapsWord(p.laps)}`)).join('')
@@ -726,9 +732,163 @@
     bindTrainings();
   }
 
+  // ---- Настройки: напоминания от бота ----
+  let draft = null; // редактируемые настройки до сохранения
+  const pad2 = (n) => String(n).padStart(2, '0');
+
+  function toDraft(c) {
+    const m = String(c.lead).match(/^(\d+)\s*дн/);
+    const t = String(c.lead).match(/^(\d+):(\d+)/);
+    return {
+      on: c.on,
+      mode: m ? 'days' : 'time',
+      days: m ? +m[1] : 1,
+      h: t ? +t[1] : 2,
+      m: t ? +t[2] : 0,
+    };
+  }
+  const leadOf = (d) => (d.mode === 'days' ? `${d.days} дн` : `${pad2(d.h)}:${pad2(d.m)}`);
+  const daysWord = (n) =>
+    n % 10 === 1 && n % 100 !== 11 ? 'день' : [2, 3, 4].includes(n % 10) && ![12, 13, 14].includes(n % 100) ? 'дня' : 'дней';
+
+  function settingsBlock(cat, label) {
+    const d = draft[cat];
+    const hours = Array.from({ length: 24 }, (_, i) => `<option value="${i}" ${i === d.h ? 'selected' : ''}>${pad2(i)}</option>`).join('');
+    const mins = Array.from({ length: 12 }, (_, i) => i * 5)
+      .map((i) => `<option value="${i}" ${i === d.m ? 'selected' : ''}>${pad2(i)}</option>`)
+      .join('');
+    const lead =
+      d.mode === 'days'
+        ? `<div class="stepper">
+            <button class="cal-nav" data-days="${cat}" data-step="-1" ${d.days <= 1 ? 'disabled' : ''} aria-label="Меньше">−</button>
+            <span>за ${d.days} ${daysWord(d.days)}</span>
+            <button class="cal-nav" data-days="${cat}" data-step="1" ${d.days >= 30 ? 'disabled' : ''} aria-label="Больше">+</button>
+          </div>`
+        : `<div class="hhmm">
+            <span>за</span>
+            <select data-h="${cat}" aria-label="Часы">${hours}</select><span>ч</span>
+            <select data-m="${cat}" aria-label="Минуты">${mins}</select><span>мин</span>
+          </div>
+          ${d.h * 60 + d.m < 5 ? '<div class="small set-warn">Минимум 5 минут.</div>' : ''}`;
+    return `<div class="section">
+      <div class="set-row">
+        <span class="set-title">${label}</span>
+        <label class="switch"><input type="checkbox" data-on="${cat}" ${d.on ? 'checked' : ''}><span></span></label>
+      </div>
+      ${
+        d.on
+          ? `<div class="small" style="margin-top:10px">Когда напомнить</div>
+        <div class="seg">
+          <button class="${d.mode === 'days' ? 'on' : ''}" data-mode="${cat}" data-val="days">За дни</button>
+          <button class="${d.mode === 'time' ? 'on' : ''}" data-mode="${cat}" data-val="time">За часы и минуты</button>
+        </div>
+        ${lead}`
+          : ''
+      }
+    </div>`;
+  }
+
+  function renderSettings() {
+    if (!draft) draft = { races: toDraft(view.settings.races), trainings: toDraft(view.settings.trainings) };
+    setBack(closeSettings);
+    const tooSoon = ['races', 'trainings'].some((c) => draft[c].on && draft[c].mode === 'time' && draft[c].h * 60 + draft[c].m < 5);
+    app.innerHTML = `
+      ${tg ? '' : '<button class="back">‹ Назад</button>'}
+      <h2 class="page-title">Настройки</h2>
+      <div class="small" style="margin:0 2px 10px">Бот пришлёт напоминание в чат перед началом ваших гонок и тренировок, на которые вы отметились.</div>
+      ${settingsBlock('races', 'Напоминания о гонках')}
+      ${settingsBlock('trainings', 'Напоминания о тренировках')}
+      <button class="cal" data-save ${tooSoon ? 'disabled' : ''}>Сохранить</button>
+      <div class="small fin-msg" id="set-msg" style="text-align:center;margin-top:8px"></div>
+    `;
+    const back = app.querySelector('.back');
+    if (back) back.addEventListener('click', closeSettings);
+    app.querySelectorAll('[data-on]').forEach((b) =>
+      b.addEventListener('change', () => {
+        draft[b.dataset.on].on = b.checked;
+        renderSettings();
+      }),
+    );
+    app.querySelectorAll('[data-mode]').forEach((b) =>
+      b.addEventListener('click', () => {
+        draft[b.dataset.mode].mode = b.dataset.val;
+        renderSettings();
+      }),
+    );
+    app.querySelectorAll('[data-days]').forEach((b) =>
+      b.addEventListener('click', () => {
+        const d = draft[b.dataset.days];
+        d.days = Math.min(30, Math.max(1, d.days + Number(b.dataset.step)));
+        renderSettings();
+      }),
+    );
+    app.querySelectorAll('[data-h]').forEach((sel) =>
+      sel.addEventListener('change', () => {
+        draft[sel.dataset.h].h = Number(sel.value);
+        renderSettings();
+      }),
+    );
+    app.querySelectorAll('[data-m]').forEach((sel) =>
+      sel.addEventListener('change', () => {
+        draft[sel.dataset.m].m = Number(sel.value);
+        renderSettings();
+      }),
+    );
+    app.querySelector('[data-save]').addEventListener('click', saveSettings);
+  }
+
+  // Боту нужно разрешение писать человеку в личку; Telegram спрашивает его сам.
+  function ensureWriteAccess() {
+    return new Promise((resolve) => {
+      const u = tg && tg.initDataUnsafe && tg.initDataUnsafe.user;
+      if (!tg || (u && u.allows_write_to_pm)) return resolve(true);
+      if (tg.requestWriteAccess && tg.isVersionAtLeast && tg.isVersionAtLeast('6.9')) {
+        try {
+          tg.requestWriteAccess((ok) => resolve(!!ok));
+          return;
+        } catch (e) {}
+      }
+      resolve(true);
+    });
+  }
+
+  async function saveSettings() {
+    const msg = document.getElementById('set-msg');
+    const btn = app.querySelector('[data-save]');
+    if ((draft.races.on || draft.trainings.on) && !(await ensureWriteAccess())) {
+      msg.textContent = 'Без разрешения писать вам бот не сможет присылать напоминания.';
+      return;
+    }
+    btn.disabled = true;
+    msg.textContent = 'Сохраняю…';
+    const res = await api({
+      action: 'saveSettings',
+      racesOn: draft.races.on ? '1' : '0',
+      racesLead: leadOf(draft.races),
+      trainingsOn: draft.trainings.on ? '1' : '0',
+      trainingsLead: leadOf(draft.trainings),
+    });
+    if (res && res.access) {
+      view = res;
+      draft = null;
+      renderSettings();
+      document.getElementById('set-msg').textContent = 'Сохранено ✓';
+    } else {
+      btn.disabled = false;
+      msg.textContent =
+        { bad_lead: 'Проверьте время напоминания.', too_many: 'Слишком много изменений подряд. Попробуйте через час.' }[res && res.error] ||
+        'Не удалось сохранить, попробуйте ещё раз.';
+    }
+  }
+
+  function closeSettings() {
+    draft = null;
+    renderList();
+  }
+
   function renderList() {
     trDetail = null;
-    if (tg) tg.BackButton.hide();
+    setBack(null);
 
     // Чемпионаты из событий человека; выбор, которого больше нет, игнорируется.
     const champs = [...new Set(view.events.map(champKey))].sort((a, b) =>
@@ -828,11 +988,7 @@
   function renderEvent(id) {
     const e = view.events.find((x) => x.id === id);
     if (!e) return renderList();
-    if (tg) {
-      tg.BackButton.show();
-      tg.BackButton.offClick(renderList);
-      tg.BackButton.onClick(renderList);
-    }
+    setBack(renderList);
 
     const kv = (k, v) => (v ? `<div class="kv"><span>${esc(k)}</span><span>${v}</span></div>` : '');
     const rules = e.rules
@@ -919,6 +1075,15 @@
         return state('Нет доступа', `Попросите администратора добавить ${id} на лист «Люди» в таблице команды.`);
       }
       who.innerHTML = `${esc(view.me.name)}<br>${esc(roleNames(view.me.roles))}`;
+      if (view.settings) {
+        const gear = document.getElementById('gear');
+        gear.hidden = false;
+        gear.addEventListener('click', () => {
+          draft = null;
+          renderSettings();
+          window.scrollTo(0, 0);
+        });
+      }
       champFilter = await loadFilter();
       renderList();
       await hideSplash(view.me.name);

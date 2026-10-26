@@ -3,6 +3,8 @@
 // Запись дохода менеджером: те же параметры + action=addIncome&raceId=&amount=&note=
 // Удаление своей записи: action=deleteIncome&id=
 // Запись на тренировку: action=signTraining&trainingId=&laps=; отказ: action=unsignTraining&trainingId=
+// Настройки напоминаний: action=saveSettings&racesOn=1&racesLead=1 дн&trainingsOn=0&trainingsLead=02:00
+// Напоминания рассылает sendReminders() по таймеру; включается один раз запуском setupReminders().
 
 // Токен бота хранится в свойствах скрипта (Настройки проекта → Свойства скрипта → BOT_TOKEN),
 // чтобы при обновлении кода его не нужно было вписывать заново.
@@ -11,7 +13,13 @@ function botToken() {
 }
 
 const TIMEZONE = 'Europe/Moscow';
-const SHEETS = ['Люди', 'События', 'Заработок', 'Тренировки', 'Записи на тренировки', 'Архив событий', 'Архив тренировок'];
+const SHEETS = ['Люди', 'События', 'Заработок', 'Тренировки', 'Записи на тренировки', 'Архив событий', 'Архив тренировок', 'Настройки уведомлений'];
+const APP_URL = 'https://aliantpt.github.io/melvn-mini-app/';
+const SETTINGS_SHEET = 'Настройки уведомлений';
+const SETTINGS_HEADERS = ['Telegram ID', 'Пользователь', 'Гонки', 'Гонки за', 'Тренировки', 'Тренировки за', 'Обновлено'];
+const SETTINGS_HINTS = ['Заполняется из приложения', 'Ник или ID', 'Да / Нет', 'N дн или чч:мм', 'Да / Нет', 'N дн или чч:мм', ''];
+const LOG_SHEET = 'Журнал уведомлений';
+const MAX_SENDS_PER_RUN = 50;
 const INCOME_SHEET = 'Заработок';
 const INCOME_HEADERS = ['ID', 'Дата записи', 'Менеджер', 'ID гонки', 'Сумма', 'Комментарий'];
 const INCOME_HINTS = ['Заполняется из приложения', 'Не редактировать вручную без нужды', 'Ник или ID', 'ID из «Событий»', 'Рубли', ''];
@@ -42,6 +50,10 @@ function doGet(e) {
     const action = e.parameter.action || '';
     if (action === 'addIncome' || action === 'deleteIncome') {
       const result = changeIncome(action, e.parameter, user);
+      if (result) return jsonOut(result);
+    }
+    if (action === 'saveSettings') {
+      const result = saveSettings(e.parameter, user);
       if (result) return jsonOut(result);
     }
     if (action === 'signTraining' || action === 'unsignTraining') {
@@ -158,6 +170,86 @@ function changeSignup(action, p, user) {
   } finally {
     lock.releaseLock();
   }
+}
+
+// Настройки напоминаний человека: одна строка на человека, новая заменяет старую.
+function saveSettings(p, user) {
+  const lock = LockService.getScriptLock();
+  lock.waitLock(10000);
+  try {
+    const data = readSheets();
+    const person = findPerson(buildPeople(data['Люди']), user);
+    if (!person || !person.active) return { error: 'no_access' };
+    const racesLead = parseLead(p.racesLead);
+    const trainingsLead = parseLead(p.trainingsLead);
+    if (!racesLead || !trainingsLead) return { error: 'bad_lead' };
+    if (!allowWrite(person.key)) return { error: 'too_many' };
+    const sh = ensureSheet(SETTINGS_SHEET, SETTINGS_HEADERS, SETTINGS_HINTS);
+    const values = sh.getDataRange().getDisplayValues();
+    for (let i = values.length - 1; i >= 2; i--) {
+      if (person.keys.includes(normHandle(values[i][1]))) sh.deleteRow(i + 1);
+    }
+    // Апостроф — чтобы таблица не превратила «01:30» во время, а ID в число.
+    sh.appendRow([
+      "'" + String(Number(user.id) || ''),
+      safeCell(person.key),
+      p.racesOn === '1' ? 'Да' : 'Нет',
+      "'" + racesLead.text,
+      p.trainingsOn === '1' ? 'Да' : 'Нет',
+      "'" + trainingsLead.text,
+      new Date().toISOString(),
+    ]);
+    return null;
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+// Запускается таймером каждые 5 минут и отправляет напоминания, которым пора.
+function sendReminders() {
+  const token = botToken();
+  if (!token) return;
+  const lock = LockService.getScriptLock();
+  if (!lock.tryLock(5000)) return;
+  try {
+    const data = readSheets();
+    const log = ensureSheet(LOG_SHEET, ['Ключ', 'Отправлено'], ['Служебный лист: какие напоминания уже отправлены', '']);
+    const logged = log.getDataRange().getDisplayValues();
+    const sent = new Set(logged.slice(2).map(function (r) { return r[0]; }));
+    const due = dueReminders(data, Date.now(), sent).slice(0, MAX_SENDS_PER_RUN);
+    due.forEach(function (r) {
+      const res = UrlFetchApp.fetch('https://api.telegram.org/bot' + token + '/sendMessage', {
+        method: 'post',
+        contentType: 'application/json',
+        muteHttpExceptions: true,
+        payload: JSON.stringify({
+          chat_id: r.chatId,
+          text: r.text,
+          parse_mode: 'HTML',
+          reply_markup: { inline_keyboard: [[{ text: 'Открыть приложение', web_app: { url: APP_URL } }]] },
+        }),
+      });
+      // Если человек запретил боту писать, повторять не будем — запись в журнал всё равно.
+      if (res.getResponseCode() !== 200) console.error('sendMessage ' + res.getResponseCode() + ' для ' + r.key);
+      log.appendRow([safeCell(r.key), new Date().toISOString()]);
+    });
+    // Журнал не растёт бесконечно: старые записи удаляются.
+    if (logged.length > 3000) log.deleteRows(3, logged.length - 2000);
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+// Запустите один раз в редакторе Apps Script (выбрать функцию → «Выполнить»):
+// разрешит боту отправлять сообщения и включит таймер напоминаний.
+function setupReminders() {
+  ScriptApp.getProjectTriggers().forEach(function (t) {
+    if (t.getHandlerFunction() === 'sendReminders') ScriptApp.deleteTrigger(t);
+  });
+  ScriptApp.newTrigger('sendReminders').timeBased().everyMinutes(5).create();
+  ensureSheet(SETTINGS_SHEET, SETTINGS_HEADERS, SETTINGS_HINTS);
+  sendReminders();
+  console.log('Напоминания включены: проверка каждые 5 минут.');
 }
 
 // Раз в день: гонки и тренировки, прошедшие больше недели назад, переезжают
