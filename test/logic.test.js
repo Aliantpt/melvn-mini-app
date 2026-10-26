@@ -218,7 +218,15 @@ function loadGas(botToken, sheets, today = '2026-10-25', user = { active: '', ef
       createHtmlOutput: (html) => ({ html, setTitle() { return this; }, addMetaTag() { return this; } }),
     },
     LockService: { getScriptLock: () => ({ waitLock() {}, tryLock: () => true, releaseLock() {} }) },
-    CacheService: { getScriptCache: () => ({ get: (k) => cache[k] ?? null, put: (k, v) => (cache[k] = v) }) },
+    CacheService: {
+      getScriptCache: () => ({
+        get: (k) => cache[k] ?? null,
+        put: (k, v) => (cache[k] = v),
+        getAll: (keys) => Object.fromEntries(keys.filter((k) => k in cache).map((k) => [k, cache[k]])),
+        putAll: (obj) => Object.assign(cache, obj),
+        remove: (k) => delete cache[k],
+      }),
+    },
     console: { error() {}, log() {} },
     UrlFetchApp: {
       fetch: (url, opt) => {
@@ -241,7 +249,10 @@ function loadGas(botToken, sheets, today = '2026-10-25', user = { active: '', ef
       appendRow: (row) => sheets[name].push(row),
       deleteRow: (n) => sheets[name].splice(n - 1, 1),
       deleteRows: (n, count) => sheets[name].splice(n - 1, count),
-      getRange: (row, col) => ({
+      getLastColumn: () => Math.max(0, ...sheets[name].map((r) => r.length)),
+      getRange: (row, col, nr, nc) => ({
+        getDisplayValues: () =>
+          sheets[name].slice(row - 1, row - 1 + nr).map((r) => Array.from({ length: nc }, (_, i) => String(r[col - 1 + i] ?? '').replace(/^'/, ''))),
         setValue: (v) => {
           while (sheets[name].length < row) sheets[name].push([]);
           sheets[name][row - 1][col - 1] = v;
@@ -621,4 +632,22 @@ test('History: app opens, denied access, user actions and admin edits are logged
   vm.runInContext('Date.now = () => ' + later, g.ctx);
   g({ initData: signInitData('123:ABC', { id: 555, username: 'anna_smirnova' }, Math.floor(later / 1000)).toString() });
   assert.deepEqual(hist().filter((r) => r.some(Boolean)).map((r) => r[2]), ['Открыл приложение']);
+});
+
+test('Apps Script: app view comes from cache until the data changes', () => {
+  const sheets = JSON.parse(JSON.stringify(gasSheets));
+  const g = loadGas('123:ABC', sheets);
+  const initData = signInitData('123:ABC', { id: 42, username: 'ivan_petrov' }).toString();
+  assert.equal(g({ initData }).me.name, 'Иван Петров');
+  // Правка «в обход» без сброса кэша не видна…
+  const row = sheets['Люди'].find((r) => r[0] === 'ivan_petrov');
+  row[1] = 'Иван Новый';
+  assert.equal(g({ initData }).me.name, 'Иван Петров');
+  // …а правка руками в таблице (onEdit) сбрасывает кэш.
+  g.ctx.onEdit({});
+  assert.equal(g({ initData }).me.name, 'Иван Новый');
+  // Запись из приложения тоже сбрасывает кэш.
+  row[1] = 'Иван Третий';
+  const v = g({ initData, action: 'saveSettings', racesOn: '0', racesLead: '1 дн', trainingsOn: '0', trainingsLead: '02:00' });
+  assert.equal(v.me.name, 'Иван Третий');
 });

@@ -14,6 +14,7 @@
   const search = { list: '', trainings: '' }; // поиск по названию во вкладках
   let trPick = null; // открытый выбор заездов {id, laps}
   let trDetail = null; // открытая карточка тренировки
+  let screen = { kind: 'list' }; // что сейчас на экране: list, event, training, settings
   // Фильтры тренировок: трасса и тип; пусто — все. Запоминаются на устройстве.
   let trFilter = { track: '', kind: '' };
   try {
@@ -476,7 +477,7 @@
         msg.textContent = 'Сохраняю…';
         const res = await api({ action: 'addIncome', raceId: fd.get('raceId'), amount: fd.get('amount'), note: fd.get('note') });
         if (res && res.access) {
-          view = res;
+          setView(res);
           renderList();
         } else {
           msg.textContent = INCOME_ERRORS[res && res.error] || 'Не удалось сохранить, попробуйте ещё раз.';
@@ -488,7 +489,7 @@
         if (!ok) return;
         const res = await api({ action: 'deleteIncome', id: b.dataset.del });
         if (res && res.access) {
-          view = res;
+          setView(res);
           renderList();
         }
       }),
@@ -625,7 +626,7 @@
     if (msg) msg.textContent = 'Сохраняю…';
     const res = await api(params);
     if (res && res.access) {
-      view = res;
+      setView(res);
       trPick = null;
     } else if (msg) {
       msg.textContent = TRAINING_ERRORS[res && res.error] || 'Не удалось сохранить, попробуйте ещё раз.';
@@ -704,6 +705,7 @@
     const t = view.trainings.find((x) => x.id === id);
     if (!t) return closeTraining();
     trDetail = id;
+    screen = { kind: 'training', id };
     setBack(closeTraining);
     const kv = (k, v) => (v ? `<div class="kv"><span>${esc(k)}</span><span>${v}</span></div>` : '');
     const going = t.going.length
@@ -828,6 +830,7 @@
 
   function renderSettings() {
     if (!draft) draft = { races: toDraft(view.settings.races), trainings: toDraft(view.settings.trainings) };
+    screen = { kind: 'settings' };
     setBack(closeSettings);
     const tooSoon = ['races', 'trainings'].some((c) => draft[c].on && draft[c].mode === 'time' && draft[c].h * 60 + draft[c].m < 5);
     app.innerHTML = `
@@ -918,7 +921,7 @@
       trainingsLead: leadOf(draft.trainings),
     });
     if (res && res.access) {
-      view = res;
+      setView(res);
       draft = null;
       renderSettings();
       document.getElementById('set-msg').textContent = 'Сохранено ✓';
@@ -937,6 +940,7 @@
 
   function renderList() {
     trDetail = null;
+    screen = { kind: 'list' };
     setBack(null);
 
     // Чемпионаты из событий человека; выбор, которого больше нет, игнорируется.
@@ -1049,6 +1053,7 @@
   function renderEvent(id) {
     const e = view.events.find((x) => x.id === id);
     if (!e) return renderList();
+    screen = { kind: 'event', id };
     setBack(renderList);
 
     const kv = (k, v) => (v ? `<div class="kv"><span>${esc(k)}</span><span>${v}</span></div>` : '');
@@ -1114,44 +1119,140 @@
     }
   }
 
+  // Последние полученные данные хранятся на устройстве (отдельно для каждого аккаунта Telegram):
+  // со второго запуска приложение показывает их сразу, а свежие подгружает в фоне.
+  const VIEW_VERSION = 1;
+  const tgUserId = tg && tg.initDataUnsafe && tg.initDataUnsafe.user && tg.initDataUnsafe.user.id;
+  const VIEW_KEY = tgUserId ? 'view:' + tgUserId : '';
+  function cachedView() {
+    try {
+      const c = VIEW_KEY && JSON.parse(localStorage.getItem(VIEW_KEY) || 'null');
+      return c && c.v === VIEW_VERSION && c.view && c.view.access && c.view.me ? c.view : null;
+    } catch (e) {
+      return null;
+    }
+  }
+  function storeView(v) {
+    try {
+      if (!VIEW_KEY) return;
+      if (v && v.access) localStorage.setItem(VIEW_KEY, JSON.stringify({ v: VIEW_VERSION, view: v }));
+      else localStorage.removeItem(VIEW_KEY);
+    } catch (e) {}
+  }
+  // Каждый ответ на правку (заработок, запись, настройки) — самые свежие данные.
+  let viewSeq = 0;
+  function setView(v) {
+    view = v;
+    viewSeq++;
+    storeView(v);
+  }
+
+  let chromeReady = false;
+  function setupChrome() {
+    who.innerHTML = `${esc(view.me.name)}<br>${esc(roleNames(view.me.roles))}`;
+    if (chromeReady || !view.settings) return;
+    chromeReady = true;
+    const gear = document.getElementById('gear');
+    gear.hidden = false;
+    gear.addEventListener('click', () => {
+      draft = null;
+      renderSettings();
+      window.scrollTo(0, 0);
+    });
+  }
+
+  // Короткая подсказка внизу экрана.
+  function note(text) {
+    let el = document.getElementById('note');
+    if (!el) {
+      el = document.createElement('div');
+      el.id = 'note';
+      el.className = 'note';
+      document.body.appendChild(el);
+    }
+    el.textContent = text;
+    el.classList.add('show');
+    clearTimeout(note.t);
+    note.t = setTimeout(() => el.classList.remove('show'), 4000);
+  }
+
+  // Перерисовать текущий экран свежими данными, не мешая человеку.
+  function refreshScreen() {
+    const f = document.activeElement;
+    const typing = f && app.contains(f) && /^(INPUT|SELECT|TEXTAREA)$/.test(f.tagName) && f.type !== 'search';
+    // Открыт редактор настроек, выбор заездов или человек что-то вводит — не трогаем, данные уже обновлены.
+    if (screen.kind === 'settings' || trPick || typing) return;
+    const y = window.scrollY;
+    if (screen.kind === 'event') renderEvent(screen.id);
+    else if (screen.kind === 'training') renderTraining(screen.id);
+    else {
+      const box = app.querySelector('[data-search]');
+      const focused = box && document.activeElement === box;
+      const pos = focused ? box.selectionStart : 0;
+      renderList();
+      if (focused) {
+        const again = app.querySelector('[data-search]');
+        again.focus();
+        again.setSelectionRange(pos, pos);
+      }
+    }
+    window.scrollTo(0, y);
+  }
+
   async function load() {
     const initData = tg ? tg.initData : '';
     if (!initData) {
       hideSplash();
       return state('Откройте через Telegram', 'Это приложение работает только внутри бота команды M-ELVN.');
     }
+    const cached = cachedView();
+    let shown = false;
+    if (cached) {
+      view = cached;
+      setupChrome();
+      champFilter = await loadFilter();
+      renderList();
+      shown = true;
+      hideSplash(view.me.name);
+    }
+    const seq = viewSeq;
+    let body = null;
     try {
-      const body = await api();
-      if (!body) throw new Error('network');
-      if (!body.access) await hideSplash(body.access === false ? '' : undefined);
+      body = await api();
+    } catch (e) {}
+    // Пока шёл запрос, человек успел что-то изменить — его ответ свежее.
+    if (shown && viewSeq !== seq) return;
+    if (!body || body.error) {
+      if (shown) {
+        note(body ? 'Не удалось обновить данные, показаны сохранённые.' : 'Нет связи, показаны сохранённые данные.');
+        return;
+      }
+      await hideSplash();
+      if (!body) return state('Нет связи', 'Проверьте интернет и откройте приложение снова.');
       if (body.error === 'not_telegram') {
         return state('Не удалось проверить вход', 'Закройте приложение и откройте его снова из бота.');
       }
-      if (body.error) {
-        return state('Данные временно недоступны', 'Попробуйте через минуту. Если не поможет, напишите администратору.');
-      }
-      view = body;
-      if (!view.access) {
-        const id = view.username ? `ваш ник <b>@${esc(view.username)}</b>` : `ваш Telegram ID <b>${esc(view.telegramId)}</b>`;
-        return state('Нет доступа', `Попросите администратора добавить ${id} на лист «Люди» в таблице команды.`);
-      }
-      who.innerHTML = `${esc(view.me.name)}<br>${esc(roleNames(view.me.roles))}`;
-      if (view.settings) {
-        const gear = document.getElementById('gear');
-        gear.hidden = false;
-        gear.addEventListener('click', () => {
-          draft = null;
-          renderSettings();
-          window.scrollTo(0, 0);
-        });
-      }
-      champFilter = await loadFilter();
-      renderList();
-      await hideSplash(view.me.name);
-    } catch (e) {
-      hideSplash();
-      state('Нет связи', 'Проверьте интернет и откройте приложение снова.');
+      return state('Данные временно недоступны', 'Попробуйте через минуту. Если не поможет, напишите администратору.');
     }
+    setView(body);
+    if (!view.access) {
+      await hideSplash(view.access === false ? '' : undefined);
+      who.innerHTML = '';
+      document.getElementById('gear').hidden = true;
+      setBack(null);
+      const id = view.username ? `ваш ник <b>@${esc(view.username)}</b>` : `ваш Telegram ID <b>${esc(view.telegramId)}</b>`;
+      return state('Нет доступа', `Попросите администратора добавить ${id} на лист «Люди» в таблице команды.`);
+    }
+    setupChrome();
+    if (shown) {
+      try {
+        localStorage.setItem(NAME_KEY, view.me.name);
+      } catch (e) {}
+      return refreshScreen();
+    }
+    champFilter = await loadFilter();
+    renderList();
+    await hideSplash(view.me.name);
   }
 
   load();

@@ -92,6 +92,7 @@ function admin_replace(sheetName, oldRows, newRows) {
     const extra = positions.slice(n).sort(function (a, b) { return b - a; });
     if (extra.length && sh.getMaxRows() - extra.length <= sh.getFrozenRows()) sh.insertRowsAfter(sh.getMaxRows(), 1);
     extra.forEach(function (r) { sh.deleteRow(r); });
+    dropCache();
     logAdminChange_(sheetName, headers, oldRows, newRows);
   } finally {
     lock.releaseLock();
