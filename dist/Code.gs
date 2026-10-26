@@ -221,22 +221,37 @@ function sendReminders() {
     const logged = log.getDataRange().getDisplayValues();
     const sent = new Set(logged.slice(2).map(function (r) { return r[0]; }));
     const due = dueReminders(data, Date.now(), sent).slice(0, MAX_SENDS_PER_RUN);
-    due.forEach(function (r) {
-      const res = UrlFetchApp.fetch('https://api.telegram.org/bot' + token + '/sendMessage', {
-        method: 'post',
-        contentType: 'application/json',
-        muteHttpExceptions: true,
-        payload: JSON.stringify({
-          chat_id: r.chatId,
-          text: r.text,
-          parse_mode: 'HTML',
-          reply_markup: { inline_keyboard: [[{ text: 'Открыть приложение', web_app: { url: APP_URL } }]] },
-        }),
-      });
-      // Если человек запретил боту писать, повторять не будем — запись в журнал всё равно.
-      if (res.getResponseCode() !== 200) console.error('sendMessage ' + res.getResponseCode() + ' для ' + r.key);
-      log.appendRow([safeCell(r.key), new Date().toISOString()]);
-    });
+    for (let i = 0; i < due.length; i++) {
+      const r = due[i];
+      let code = 0;
+      try {
+        code = UrlFetchApp.fetch('https://api.telegram.org/bot' + token + '/sendMessage', {
+          method: 'post',
+          contentType: 'application/json',
+          muteHttpExceptions: true,
+          payload: JSON.stringify({
+            chat_id: r.chatId,
+            text: r.text,
+            parse_mode: 'HTML',
+            reply_markup: { inline_keyboard: [[{ text: 'Открыть приложение', web_app: { url: APP_URL } }]] },
+          }),
+        }).getResponseCode();
+      } catch (err) {
+        // Сеть или Telegram не ответили — попробуем на следующем запуске.
+        console.error(err);
+      }
+      // В журнал — только то, что отправлено, или то, что повторять бесполезно:
+      // 400 — чат не найден, 403 — человек запретил боту писать.
+      if (code === 200 || code === 400 || code === 403) {
+        if (code !== 200) console.error('sendMessage ' + code + ' для ' + r.key + ', больше не пробуем');
+        log.appendRow([safeCell(r.key), new Date().toISOString()]);
+      } else {
+        // 429 (слишком часто), 5xx и обрывы связи: не записываем — через 5 минут отправим снова,
+        // пока событие не началось.
+        console.error('sendMessage ' + code + ' для ' + r.key + ', повторим через 5 минут');
+        if (code === 429) break;
+      }
+    }
     // Журнал не растёт бесконечно: старые записи удаляются.
     if (logged.length > 3000) log.deleteRows(3, logged.length - 2000);
   } finally {

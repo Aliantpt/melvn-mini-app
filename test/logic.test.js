@@ -178,6 +178,7 @@ function loadGas(botToken, sheets, today = '2026-10-25') {
   const cache = {};
   const props = {};
   const fetched = [];
+  const responses = []; // коды ответов Telegram по очереди; 'throw' — обрыв связи
   const code = readFileSync(new URL('../dist/Code.gs', import.meta.url), 'utf8');
   const signed = (buf) => [...buf].map((b) => (b > 127 ? b - 256 : b));
   const unsigned = (arr) => Buffer.from(arr.map((b) => (b + 256) % 256));
@@ -206,7 +207,14 @@ function loadGas(botToken, sheets, today = '2026-10-25') {
     LockService: { getScriptLock: () => ({ waitLock() {}, tryLock: () => true, releaseLock() {} }) },
     CacheService: { getScriptCache: () => ({ get: (k) => cache[k] ?? null, put: (k, v) => (cache[k] = v) }) },
     console: { error() {}, log() {} },
-    UrlFetchApp: { fetch: (url, opt) => (fetched.push({ url, body: JSON.parse(opt.payload) }), { getResponseCode: () => 200 }) },
+    UrlFetchApp: {
+      fetch: (url, opt) => {
+        fetched.push({ url, body: JSON.parse(opt.payload) });
+        const r = responses.length ? responses.shift() : 200;
+        if (r === 'throw') throw new Error('timeout');
+        return { getResponseCode: () => r };
+      },
+    },
   };
   let uuid = 0;
   ctx.Utilities.getUuid = () => 'id' + ++uuid;
@@ -236,6 +244,7 @@ function loadGas(botToken, sheets, today = '2026-10-25') {
   const doGet = (params) => JSON.parse(ctx.doGet({ parameter: params }).text);
   doGet.ctx = ctx;
   doGet.fetched = fetched;
+  doGet.responses = responses;
   return doGet;
 }
 
@@ -484,4 +493,33 @@ test('Apps Script: settings are saved per person and reminders are sent once', (
   assert.match(doGet.fetched[0].url, /\/bot123:ABC\/sendMessage$/);
   assert.equal(doGet.fetched[0].body.chat_id, '42');
   assert.equal(doGet.fetched[0].body.reply_markup.inline_keyboard[0][0].web_app.url, 'https://aliantpt.github.io/melvn-mini-app/');
+});
+
+test('Apps Script: failed reminder sends are retried, permanent errors are not', () => {
+  const sheets = JSON.parse(JSON.stringify(gasSheets));
+  const doGet = loadGas('123:ABC', sheets);
+  const initData = signInitData('123:ABC', { id: 42, username: 'ivan_petrov' }).toString();
+  doGet({ initData, action: 'saveSettings', racesOn: '1', racesLead: '2 дн', trainingsOn: '0', trainingsLead: '02:00' });
+  vm.runInContext("Date.now = () => Date.parse('2026-11-13T08:00:00Z')", doGet.ctx);
+  const logRows = () => sheets['Журнал уведомлений'].length - 2;
+
+  doGet.responses.push(500, 'throw', 429, 200);
+  doGet.ctx.sendReminders(); // 500
+  doGet.ctx.sendReminders(); // обрыв
+  doGet.ctx.sendReminders(); // 429
+  assert.equal(logRows(), 0);
+  doGet.ctx.sendReminders(); // 200
+  assert.equal(logRows(), 1);
+  doGet.ctx.sendReminders(); // уже отправлено
+  assert.equal(doGet.fetched.length, 4);
+
+  // 403 (бот заблокирован) — не повторяем.
+  const sheets2 = JSON.parse(JSON.stringify(gasSheets));
+  const g2 = loadGas('123:ABC', sheets2);
+  g2({ initData, action: 'saveSettings', racesOn: '1', racesLead: '2 дн', trainingsOn: '0', trainingsLead: '02:00' });
+  vm.runInContext("Date.now = () => Date.parse('2026-11-13T08:00:00Z')", g2.ctx);
+  g2.responses.push(403);
+  g2.ctx.sendReminders();
+  g2.ctx.sendReminders();
+  assert.equal(g2.fetched.length, 1);
 });
