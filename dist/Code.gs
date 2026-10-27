@@ -24,7 +24,6 @@ const SETTINGS_HEADERS = ['Telegram ID', 'Пользователь', 'Гонки
 const SETTINGS_HINTS = ['Заполняется из приложения', 'Ник или ID', 'Да / Нет', 'N дн или чч:мм', 'Да / Нет', 'N дн или чч:мм', ''];
 const LOG_SHEET = 'Журнал уведомлений';
 const MAX_SENDS_PER_RUN = 50;
-const ASSIGN_SHEET = 'Журнал назначений';
 const INCOME_SHEET = 'Заработок';
 const INCOME_HEADERS = ['ID', 'Дата записи', 'Менеджер', 'ID гонки', 'Сумма', 'Комментарий'];
 const INCOME_HINTS = ['Заполняется из приложения', 'Не редактировать вручную без нужды', 'Ник или ID', 'ID из «Событий»', 'Рубли', ''];
@@ -298,10 +297,25 @@ function sendReminders() {
     const logged = log.getDataRange().getDisplayValues();
     const sent = new Set(logged.slice(2).map(function (r) { return r[0]; }));
     const due = dueReminders(data, Date.now(), sent).slice(0, MAX_SENDS_PER_RUN);
-    let stopped = false;
     for (let i = 0; i < due.length; i++) {
       const r = due[i];
-      const code = sendBot_(token, r.chatId, r.text);
+      let code = 0;
+      try {
+        code = UrlFetchApp.fetch('https://api.telegram.org/bot' + token + '/sendMessage', {
+          method: 'post',
+          contentType: 'application/json',
+          muteHttpExceptions: true,
+          payload: JSON.stringify({
+            chat_id: r.chatId,
+            text: r.text,
+            parse_mode: 'HTML',
+            reply_markup: { inline_keyboard: [[{ text: 'Открыть приложение', web_app: { url: APP_URL } }]] },
+          }),
+        }).getResponseCode();
+      } catch (err) {
+        // Сеть или Telegram не ответили — попробуем на следующем запуске.
+        console.error(err);
+      }
       // В журнал — только то, что отправлено, или то, что повторять бесполезно:
       // 400 — чат не найден, 403 — человек запретил боту писать.
       if (code === 200 || code === 400 || code === 403) {
@@ -311,99 +325,15 @@ function sendReminders() {
         // 429 (слишком часто), 5xx и обрывы связи: не записываем — через 5 минут отправим снова,
         // пока событие не началось.
         console.error('sendMessage ' + code + ' для ' + r.key + ', повторим через 5 минут');
-        if (code === 429) { stopped = true; break; }
+        if (code === 429) break;
       }
     }
     if (due.length) logAction_(null, null, 'Бот отправил напоминания', 'Сообщений: ' + due.length);
-    if (!stopped) notifyAssignments_(data, token, MAX_SENDS_PER_RUN - due.length);
     // Журнал не растёт бесконечно: старые записи удаляются.
     if (logged.length > 3000) log.deleteRows(3, logged.length - 2000);
   } finally {
     lock.releaseLock();
   }
-}
-
-// Сообщение от бота с кнопкой приложения. Возвращает код ответа Telegram (0 — нет связи).
-function sendBot_(token, chatId, text) {
-  try {
-    return UrlFetchApp.fetch('https://api.telegram.org/bot' + token + '/sendMessage', {
-      method: 'post',
-      contentType: 'application/json',
-      muteHttpExceptions: true,
-      payload: JSON.stringify({
-        chat_id: chatId,
-        text: text,
-        parse_mode: 'HTML',
-        reply_markup: { inline_keyboard: [[{ text: 'Открыть приложение', web_app: { url: APP_URL } }]] },
-      }),
-    }).getResponseCode();
-  } catch (err) {
-    // Сеть или Telegram не ответили — попробуем на следующем запуске.
-    console.error(err);
-    return 0;
-  }
-}
-
-// Новые назначения на гонки: бот пишет пилоту или менеджеру, на какую роль, в какую гонку и когда.
-// О каких назначениях уже сообщили — на служебном листе «Журнал назначений». Если человека
-// убрали из состава, запись удаляется, и при новом назначении он снова получит сообщение.
-function notifyAssignments_(data, token, budget) {
-  const sh = ensureSheet(ASSIGN_SHEET, ['Ключ', 'Отправлено'], ['Служебный лист: о каких назначениях бот уже сообщил', '']);
-  const logged = sh.getDataRange().getDisplayValues().slice(2).filter(function (r) { return r[0]; });
-  const notified = new Set(logged.map(function (r) { return r[0]; }));
-  const current = currentAssignments(data, Date.now(), chatIds_());
-  const props = PropertiesService.getScriptProperties();
-  const now = new Date().toISOString();
-  // Первый запуск: всё, что уже назначено, считаем известным, чтобы не написать всем сразу.
-  if (!props.getProperty('assign_seeded')) {
-    const rows = [];
-    current.forEach(function (a) { a.keys.forEach(function (k) { if (!notified.has(k)) rows.push([safeCell(k), now]); }); });
-    if (rows.length) sh.getRange(sh.getLastRow() + 1, 1, rows.length, 2).setValues(rows);
-    props.setProperty('assign_seeded', '1');
-    return;
-  }
-  // Убираем записи о назначениях, которых больше нет (сняли с гонки или гонка прошла).
-  const live = new Set();
-  current.forEach(function (a) { a.keys.forEach(function (k) { live.add(k); }); });
-  const keep = logged.filter(function (r) { return live.has(r[0]); });
-  if (keep.length < logged.length) {
-    const last = sh.getLastRow();
-    if (last > 2) sh.getRange(3, 1, last - 2, 2).clearContent();
-    if (keep.length) sh.getRange(3, 1, keep.length, 2).setValues(keep.map(function (r) { return [safeCell(r[0]), r[1]]; }));
-    notified.clear();
-    keep.forEach(function (r) { notified.add(r[0]); });
-  }
-  const due = newAssignments(current, notified).slice(0, Math.max(0, budget));
-  const sentTo = [];
-  for (let i = 0; i < due.length; i++) {
-    const code = sendBot_(token, due[i].chatId, due[i].text);
-    // 400/403 — писать некуда или человек запретил боту: повторять бесполезно.
-    if (code === 200 || code === 400 || code === 403) {
-      due[i].keys.forEach(function (k) { sh.appendRow([safeCell(k), now]); });
-      if (code === 200) sentTo.push(due[i].who + ' — ' + due[i].title);
-    } else {
-      console.error('sendMessage ' + code + ' (назначение), повторим через 5 минут');
-      if (code === 429) break;
-    }
-  }
-  if (sentTo.length) logAction_(null, null, 'Бот сообщил о назначениях', sentTo.join('; ').slice(0, 450));
-}
-
-// Telegram ID людей, открывавших приложение: нужны, чтобы писать тем, у кого в «Людях» только ник.
-function chatIds_() {
-  try {
-    return JSON.parse(PropertiesService.getScriptProperties().getProperty('chat_ids') || '{}');
-  } catch (err) {
-    return {};
-  }
-}
-function rememberChat_(me, user) {
-  const id = String(Number(user.id) || '');
-  if (!id || !me || !me.key) return;
-  const ids = chatIds_();
-  if (ids[me.key] === id) return;
-  ids[me.key] = id;
-  PropertiesService.getScriptProperties().setProperty('chat_ids', JSON.stringify(ids));
 }
 
 // Запустите один раз в редакторе Apps Script (выбрать функцию → «Выполнить»):
@@ -500,14 +430,7 @@ function logOpen_(view, user) {
   const k = 'open:' + user.id;
   if (cache.get(k)) return;
   cache.put(k, '1', 600);
-  if (view.access) {
-    try {
-      rememberChat_(view.me, user);
-    } catch (err) {
-      console.error(err);
-    }
-    logAction_({ name: view.me.name }, user, 'Открыл приложение', '');
-  }
+  if (view.access) logAction_({ name: view.me.name }, user, 'Открыл приложение', '');
   else logAction_(null, user, 'Попытка входа без доступа', 'Нет на листе «Люди» или «Активен» = Нет');
 }
 
@@ -1272,67 +1195,6 @@ function dueReminders(data, nowMs, sent) {
   return out;
 }
 
-// Назначения на гонки: кто, в какую гонку и на какую роль. Только предстоящие и не отменённые.
-// Ключ «гонка|человек|роль» — по нему видно, о каком назначении человек уже знает.
-// chatIds — известные Telegram ID людей (из приложения), если в «Людях» указан только ник.
-function currentAssignments(data, nowMs, chatIds = {}) {
-  const people = buildPeople(data['Люди']).filter((p) => p.active);
-  const settings = data['Настройки уведомлений'];
-  const out = [];
-  const seen = new Set();
-  for (const e of buildEvents(data['События'])) {
-    if (e.cancelled || nowMs >= startMs(e.date, e.start)) continue;
-    for (const p of people) {
-      if (seen.has(e.id + '|' + p.key)) continue;
-      const crew = e.crews.find((c) => inCrew(c, p));
-      if (!crew) continue;
-      seen.add(e.id + '|' + p.key);
-      const roles = [listsPerson(crew.pilots, p) && 'pilot', listsPerson(crew.managers, p) && 'manager'].filter(Boolean);
-      const chatId =
-        p.keys.find((k) => /^\d+$/.test(k)) || findSettings(settings, p).chatId || String(chatIds[p.key] || '');
-      out.push({ event: e, person: p, crew: crew.name, roles, chatId: /^\d+$/.test(chatId) ? chatId : '', keys: roles.map((r) => [e.id, p.key, r].join('|')) });
-    }
-  }
-  return out;
-}
-
-const ROLE_ACC = { pilot: 'пилот', manager: 'менеджер' };
-
-function assignmentText(a, roles) {
-  const e = a.event;
-  const d = e.date;
-  const wd = WEEKDAYS_SHORT[new Date(Date.UTC(d.y, d.m - 1, d.d)).getUTCDay()];
-  const time = e.start ? ` · ${pad(e.start.h)}:${pad(e.start.min)}` : '';
-  const where = /трен/i.test(e.type) ? 'на тренировку' : 'на гонку';
-  const lines = [
-    `🏁 <b>Вы назначены ${where}</b>`,
-    '',
-    `Роль: <b>${roles.map((r) => ROLE_ACC[r]).join(' и ')}</b>${a.crew ? ` (состав ${html(a.crew)})` : ''}`,
-    `${/трен/i.test(e.type) ? 'Тренировка' : 'Гонка'}: <b>${html(e.title)}</b>`,
-    `Дата: ${d.d} ${MONTHS_GEN[d.m - 1]} ${d.y}, ${wd}${time}`,
-  ];
-  if (e.track) lines.push(`Трасса: ${html(e.track)}`);
-  return lines.join('\n');
-}
-
-// Сообщения о новых назначениях. `notified` — ключи назначений, о которых уже сообщили.
-// Кому некуда писать (ещё ни разу не открывал приложение), тому сообщим позже.
-function newAssignments(assignments, notified) {
-  const out = [];
-  for (const a of assignments) {
-    const fresh = a.roles.filter((r, i) => !notified.has(a.keys[i]));
-    if (!fresh.length || !a.chatId) continue;
-    out.push({
-      chatId: a.chatId,
-      keys: a.roles.map((r, i) => (fresh.includes(r) ? a.keys[i] : '')).filter(Boolean),
-      text: assignmentText(a, fresh),
-      who: a.person.name,
-      title: a.event.title,
-    });
-  }
-  return out;
-}
-
 // Сборка ответа для экрана приложения.
 function buildView(data, tgUser, timezone) {
   const allEvents = eventsWithArchive(data);
@@ -1428,7 +1290,7 @@ function buildView(data, tgUser, timezone) {
   const races = managedRaces(allEvents, person);
   return {
     access: true,
-    me: { name: person.name, key: person.key, roles: person.roles },
+    me: { name: person.name, roles: person.roles },
     events,
     trainings: openTrainings,
     settings: (({ races, trainings: tr }) => ({ races, trainings: tr }))(findSettings(data['Настройки уведомлений'], person)),
