@@ -512,6 +512,67 @@ export function dueReminders(data, nowMs, sent) {
   return out;
 }
 
+// Назначения на гонки: кто, в какую гонку и на какую роль. Только предстоящие и не отменённые.
+// Ключ «гонка|человек|роль» — по нему видно, о каком назначении человек уже знает.
+// chatIds — известные Telegram ID людей (из приложения), если в «Людях» указан только ник.
+export function currentAssignments(data, nowMs, chatIds = {}) {
+  const people = buildPeople(data['Люди']).filter((p) => p.active);
+  const settings = data['Настройки уведомлений'];
+  const out = [];
+  const seen = new Set();
+  for (const e of buildEvents(data['События'])) {
+    if (e.cancelled || nowMs >= startMs(e.date, e.start)) continue;
+    for (const p of people) {
+      if (seen.has(e.id + '|' + p.key)) continue;
+      const crew = e.crews.find((c) => inCrew(c, p));
+      if (!crew) continue;
+      seen.add(e.id + '|' + p.key);
+      const roles = [listsPerson(crew.pilots, p) && 'pilot', listsPerson(crew.managers, p) && 'manager'].filter(Boolean);
+      const chatId =
+        p.keys.find((k) => /^\d+$/.test(k)) || findSettings(settings, p).chatId || String(chatIds[p.key] || '');
+      out.push({ event: e, person: p, crew: crew.name, roles, chatId: /^\d+$/.test(chatId) ? chatId : '', keys: roles.map((r) => [e.id, p.key, r].join('|')) });
+    }
+  }
+  return out;
+}
+
+const ROLE_ACC = { pilot: 'пилот', manager: 'менеджер' };
+
+function assignmentText(a, roles) {
+  const e = a.event;
+  const d = e.date;
+  const wd = WEEKDAYS_SHORT[new Date(Date.UTC(d.y, d.m - 1, d.d)).getUTCDay()];
+  const time = e.start ? ` · ${pad(e.start.h)}:${pad(e.start.min)}` : '';
+  const where = /трен/i.test(e.type) ? 'на тренировку' : 'на гонку';
+  const lines = [
+    `🏁 <b>Вы назначены ${where}</b>`,
+    '',
+    `Роль: <b>${roles.map((r) => ROLE_ACC[r]).join(' и ')}</b>${a.crew ? ` (состав ${html(a.crew)})` : ''}`,
+    `${/трен/i.test(e.type) ? 'Тренировка' : 'Гонка'}: <b>${html(e.title)}</b>`,
+    `Дата: ${d.d} ${MONTHS_GEN[d.m - 1]} ${d.y}, ${wd}${time}`,
+  ];
+  if (e.track) lines.push(`Трасса: ${html(e.track)}`);
+  return lines.join('\n');
+}
+
+// Сообщения о новых назначениях. `notified` — ключи назначений, о которых уже сообщили.
+// Кому некуда писать (ещё ни разу не открывал приложение), тому сообщим позже.
+export function newAssignments(assignments, notified) {
+  const out = [];
+  for (const a of assignments) {
+    const fresh = a.roles.filter((r, i) => !notified.has(a.keys[i]));
+    if (!fresh.length || !a.chatId) continue;
+    out.push({
+      chatId: a.chatId,
+      keys: a.roles.map((r, i) => (fresh.includes(r) ? a.keys[i] : '')).filter(Boolean),
+      text: assignmentText(a, fresh),
+      who: a.person.name,
+      title: a.event.title,
+    });
+  }
+  return out;
+}
+
 // Сборка ответа для экрана приложения.
 export function buildView(data, tgUser, timezone) {
   const allEvents = eventsWithArchive(data);
@@ -607,7 +668,7 @@ export function buildView(data, tgUser, timezone) {
   const races = managedRaces(allEvents, person);
   return {
     access: true,
-    me: { name: person.name, roles: person.roles },
+    me: { name: person.name, key: person.key, roles: person.roles },
     events,
     trainings: openTrainings,
     settings: (({ races, trainings: tr }) => ({ races, trainings: tr }))(findSettings(data['Настройки уведомлений'], person)),

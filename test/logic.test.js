@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 import { createHmac } from 'node:crypto';
-import { buildView, googleCalendarUrl, buildEvents, parseDate, parseMoney, dueReminders, parseLead } from '../src/logic.js';
+import { buildView, googleCalendarUrl, buildEvents, parseDate, parseMoney, dueReminders, parseLead, currentAssignments, newAssignments } from '../src/logic.js';
 
 const data = {
   'Люди': [
@@ -250,6 +250,7 @@ function loadGas(botToken, sheets, today = '2026-10-25', user = { active: '', ef
       deleteRow: (n) => sheets[name].splice(n - 1, 1),
       deleteRows: (n, count) => sheets[name].splice(n - 1, count),
       getLastColumn: () => Math.max(0, ...sheets[name].map((r) => r.length)),
+      getLastRow: () => sheets[name].reduce((last, r, i) => (r.some((c) => String(c ?? '') !== '') ? i + 1 : last), 0),
       getRange: (row, col, nr, nc) => ({
         getDisplayValues: () =>
           sheets[name].slice(row - 1, row - 1 + nr).map((r) => Array.from({ length: nc }, (_, i) => String(r[col - 1 + i] ?? '').replace(/^'/, ''))),
@@ -257,9 +258,13 @@ function loadGas(botToken, sheets, today = '2026-10-25', user = { active: '', ef
           while (sheets[name].length < row) sheets[name].push([]);
           sheets[name][row - 1][col - 1] = v;
         },
-        setValues: (vals) => {
-          while (sheets[name].length < row) sheets[name].push([]);
-          vals[0].forEach((v, i) => (sheets[name][row - 1][col - 1 + i] = v));
+        setValues: (vals) =>
+          vals.forEach((rowVals, j) => {
+            while (sheets[name].length < row + j) sheets[name].push([]);
+            rowVals.forEach((v, i) => (sheets[name][row - 1 + j][col - 1 + i] = v));
+          }),
+        clearContent: () => {
+          for (let j = 0; j < nr; j++) for (let i = 0; i < nc; i++) if (sheets[name][row - 1 + j]) sheets[name][row - 1 + j][col - 1 + i] = '';
         },
       }),
       setFrozenRows() {},
@@ -650,4 +655,61 @@ test('Apps Script: app view comes from cache until the data changes', () => {
   row[1] = 'Иван Третий';
   const v = g({ initData, action: 'saveSettings', racesOn: '0', racesLead: '1 дн', trainingsOn: '0', trainingsLead: '02:00' });
   assert.equal(v.me.name, 'Иван Третий');
+});
+
+test('assignments: who is assigned to which upcoming race, and the message text', () => {
+  const now = Date.parse('2026-11-01T08:00:00Z');
+  const all = currentAssignments(data, now, { ivan_petrov: '42' });
+  const keys = all.flatMap((a) => a.keys).sort();
+  // Отменённая T1, прошедшие и неактивные (max_kart) не попадают.
+  assert.deepEqual(keys, ['R1|anna_smirnova|pilot', 'R1|ivan_petrov|pilot', 'R1|melvn_boss|manager', 'R1|oleg_manager|manager', 'R2|oleg_manager|pilot', 'R3|oleg_manager|manager']);
+  const msgs = newAssignments(all, new Set(['R1|oleg_manager|manager', 'R2|oleg_manager|pilot', 'R3|oleg_manager|manager', 'R1|melvn_boss|manager']));
+  // Ивану пишем по ID из приложения, Анне — по ID из «Людей».
+  assert.deepEqual(msgs.map((m) => m.chatId).sort(), ['42', '555']);
+  const ivan = msgs.find((m) => m.chatId === '42');
+  assert.deepEqual(ivan.keys, ['R1|ivan_petrov|pilot']);
+  assert.match(ivan.text, /Вы назначены на гонку/);
+  assert.match(ivan.text, /Роль: <b>пилот<\/b> \(состав M-ELVN Orange\)/);
+  assert.match(ivan.text, /Гонка: <b>Этап 3<\/b>/);
+  assert.match(ivan.text, /Дата: 15 ноября 2026, вс · 10:00/);
+  // Без известного Telegram ID сообщение ждёт, пока человек откроет приложение.
+  assert.equal(newAssignments(currentAssignments(data, now), new Set()).some((m) => m.keys[0] === 'R1|ivan_petrov|pilot'), false);
+  // После начала гонки назначение уже не новость.
+  assert.equal(currentAssignments(data, Date.parse('2026-11-15T07:00:00Z')).some((a) => a.event.id === 'R1'), false);
+});
+
+test('Apps Script: bot tells people about new assignments once, not about old ones', () => {
+  const sheets = JSON.parse(JSON.stringify(gasSheets));
+  const g = loadGas('123:ABC', sheets);
+  const initData = signInitData('123:ABC', { id: 42, username: 'ivan_petrov' }).toString();
+  g({ initData }); // Иван открыл приложение — его Telegram ID известен
+  vm.runInContext("Date.now = () => Date.parse('2026-11-01T08:00:00Z')", g.ctx);
+  // Первый запуск: всё уже назначенное считается известным.
+  g.ctx.sendReminders();
+  assert.equal(g.fetched.length, 0);
+  assert.ok(sheets['Журнал назначений'].length > 2);
+
+  const h = sheets['События'][0];
+  const row = (o) => h.map((k) => o[k] ?? '');
+  sheets['События'].push(row({ ID: 'N1', 'Тип': 'Гонка', 'Название': 'Новая гонка', 'Дата': '20.11.2026', 'Начало': '12:00', 'Менеджер': 'ivan_petrov', 'Пилоты': 'ivan_petrov' }));
+  g.ctx.onEdit({});
+  g.ctx.sendReminders();
+  g.ctx.sendReminders();
+  assert.equal(g.fetched.length, 1);
+  assert.equal(g.fetched[0].body.chat_id, '42');
+  assert.match(g.fetched[0].body.text, /Роль: <b>пилот и менеджер<\/b>/);
+  assert.match(g.fetched[0].body.text, /Новая гонка/);
+  assert.equal(g.fetched[0].body.reply_markup.inline_keyboard[0][0].web_app.url, 'https://aliantpt.github.io/melvn-mini-app/');
+
+  // Сняли с гонки и назначили снова — новое сообщение.
+  const n1 = sheets['События'].find((r) => r[h.indexOf('ID')] === 'N1');
+  n1[h.indexOf('Пилоты')] = '';
+  n1[h.indexOf('Менеджер')] = '';
+  g.ctx.onEdit({});
+  g.ctx.sendReminders();
+  n1[h.indexOf('Пилоты')] = 'ivan_petrov';
+  g.ctx.onEdit({});
+  g.ctx.sendReminders();
+  assert.equal(g.fetched.length, 2);
+  assert.match(g.fetched[1].body.text, /Роль: <b>пилот<\/b>/);
 });
