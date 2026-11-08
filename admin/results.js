@@ -77,11 +77,11 @@
       html += '</div>';
     });
     const n = picks().length;
-    html += '<div class="box"><h3>Картинки' + (n ? ' (' + n + ')' : '') + '</h3><div id="r-previews" class="previews">' +
+    html += '<div class="box"><h3>PDF для пилотов' + (n ? ' (' + new Set(picks().map((x) => x.person.key)).size + ')' : '') + '</h3><div id="r-previews" class="previews">' +
       (n ? '' : '<div class="hint">Отметьте хотя бы одного пилота.</div>') + '</div>' +
       '<div class="err" id="r-err"></div><div class="bar" style="margin:10px 0 0"><div class="spacer"></div>' +
       '<label class="btn ghost small" style="cursor:pointer">' + (hasTeamFont() ? 'Шрифт команды выбран' : 'Шрифт команды (.otf)') + '<input type="file" id="r-font" accept=".otf,.ttf,.woff,.woff2" hidden></label>' +
-      '<button class="btn" id="r-send"' + (!n || res.sending ? ' disabled' : '') + '>' + (res.sending ? 'Отправляю…' : 'Отправить пилотам') + '</button></div></div>';
+      '<button class="btn" id="r-send" title="Каждый пилот получит один PDF со всеми своими заездами"' + (!n || res.sending ? ' disabled' : '') + '>' + (res.sending ? 'Отправляю…' : 'Отправить пилотам') + '</button></div></div>';
     return html;
   }
 
@@ -340,8 +340,18 @@
     if (img) g.drawImage(img, P, 52, 290, 290 * img.height / img.width);
     font(400, 46);
     text('training', W - P, 100, '#9a9a9f', 'right');
+    // Длинное название тренировки переносится на вторую строку.
     font(400, 36);
-    text(fit(r.title.toLowerCase(), W - 2 * P), P, 200, C.white);
+    const title = r.title.toLowerCase();
+    if (g.measureText(title).width <= W - 2 * P) text(title, P, 200, C.white);
+    else {
+      font(400, 30);
+      const words = title.split(' ');
+      let first = '';
+      while (words.length && g.measureText((first + ' ' + words[0]).trim()).width <= W - 2 * P) first = (first + ' ' + words.shift()).trim();
+      text(first, P, 180, C.white);
+      text(fit(words.join(' '), W - 2 * P), P, 220, C.white);
+    }
     font(700, 112);
     const head = 'заезд ' + r.heatNo;
     text(head, P, 330, C.white);
@@ -455,7 +465,7 @@
     const list = picks();
     if (!list.length) return;
     const seq = ++drawSeq;
-    box.innerHTML = '<div class="hint">Рисую картинки…</div>';
+    box.innerHTML = '<div class="hint">Готовлю PDF…</div>';
     const out = [];
     for (const p of list) {
       const kart = await kartInfo(p.heat, p.driver);
@@ -463,12 +473,20 @@
       if (seq !== drawSeq) return;
       out.push({ p, cv });
     }
+    // Превью как будущий PDF: один документ на пилота, страницы — его заезды.
     box.innerHTML = '';
+    const docs = new Map();
     out.forEach((x) => {
+      if (!docs.has(x.p.person.key)) docs.set(x.p.person.key, { name: x.p.person.name, pages: [] });
+      docs.get(x.p.person.key).pages.push(x.cv);
+    });
+    docs.forEach((d) => {
       const fig = document.createElement('figure');
-      fig.innerHTML = '<figcaption>' + esc(x.p.person.name) + ' · заезд ' + x.p.heatNo + '</figcaption>';
-      x.cv.className = 'preview';
-      fig.appendChild(x.cv);
+      fig.innerHTML = '<figcaption><b>' + esc(d.name) + '</b> · PDF, ' + d.pages.length + ' стр.</figcaption>';
+      const doc = document.createElement('div');
+      doc.className = 'doc';
+      d.pages.forEach((cv) => { cv.className = 'preview'; doc.appendChild(cv); });
+      fig.appendChild(doc);
       box.appendChild(fig);
     });
     res.rendered = out;
