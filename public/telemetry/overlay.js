@@ -423,7 +423,7 @@ function drawCard(ctx, W, H, u, st, c, assets) {
 function drawBar(ctx, W, H, u, st, c, assets) {
   const sh = st.show;
   const p = 26 * u;
-  const h = 96 * u;
+  const h = 106 * u;
   const gap = 30 * u;
   const NF = (px) => font(st.numWeight, px * u, st.numFont);
   const LF = (px, w) => font(w || st.labelWeight, px * u, st.labelFont);
@@ -456,7 +456,7 @@ function drawBar(ctx, W, H, u, st, c, assets) {
   rr(ctx, pos.x, pos.y + st.radius * u * 0.5, 6 * u, h - st.radius * u, 3 * u);
   ctx.fill();
   let x = pos.x + p + 6 * u;
-  const top = pos.y + 36 * u;
+  const top = pos.y + 34 * u;
   const base = pos.y + h - 24 * u;
   segs.forEach((s, i) => {
     if (i) {
@@ -489,10 +489,16 @@ function drawBar(ctx, W, H, u, st, c, assets) {
       }
     } else if (s.k === 'cur') {
       label(c.L.current);
+      // Крупные цифры не должны заходить на подпись: у высоких шрифтов размер уменьшается.
+      ctx.font = LF(16);
+      const under = top + ctx.measureText(c.L.current).actualBoundingBoxDescent + 8 * u;
+      const cb = base + 4 * u;
       ctx.font = NF(46);
+      const asc = ctx.measureText('0123456789').actualBoundingBoxAscent;
+      if (asc > cb - under) ctx.font = NF(46 * (cb - under) / asc);
       ctx.fillStyle = st.text;
-      if (c.curIsText) ctx.fillText(c.cur, x, base + 4 * u);
-      else drawNum(ctx, c.cur, x, base + 4 * u, 'left');
+      if (c.curIsText) ctx.fillText(c.cur, x, cb);
+      else drawNum(ctx, c.cur, x, cb, 'left');
     } else if (s.k === 'last') {
       if (c.flashK > 0) {
         ctx.fillStyle = hexA(c.flashColor, 0.22 * c.flashK);
