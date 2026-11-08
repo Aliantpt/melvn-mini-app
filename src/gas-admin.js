@@ -156,3 +156,66 @@ function sameRow_(a, b) {
   }
   return true;
 }
+
+// ---- Результаты тренировки ----
+// Страницы заезда и карта с timing.batyrshin.name. Браузер панели не может открыть их сам
+// (чужой сайт), поэтому скрипт скачивает страницу и отдаёт её текст, а разбирает панель.
+const TIMING_URL = /^https:\/\/timing\.batyrshin\.name\/tracks\/[a-z0-9_-]+\/(heats|karts)\/[0-9a-z_-]+\/?(\?[^#]*)?$/i;
+
+function admin_timing(url) {
+  if (!isOwner_()) throw new Error('Нет доступа');
+  url = String(url || '').trim().replace(/^http:/i, 'https:').replace(/#.*$/, '');
+  if (!TIMING_URL.test(url)) return { error: 'bad_url' };
+  const res = UrlFetchApp.fetch(url, { muteHttpExceptions: true, followRedirects: true });
+  const code = res.getResponseCode();
+  if (code !== 200) return { error: 'http_' + code };
+  return { url: url, html: res.getContentText('UTF-8').slice(0, 3000000) };
+}
+
+// Отправка картинок с результатами. items: [{key: ник или ID из «Людей», images: [base64 PNG], caption}].
+function admin_sendResults(items) {
+  if (!isOwner_()) throw new Error('Нет доступа');
+  const token = botToken();
+  if (!token) throw new Error('Не задан BOT_TOKEN');
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const read = function (name) {
+    const sh = ss.getSheetByName(name);
+    if (!sh) return [];
+    const v = sh.getDataRange().getDisplayValues();
+    const h = (v[0] || []).map(function (x) { return String(x).trim(); });
+    return v.slice(2).map(function (r) { const o = {}; h.forEach(function (k, i) { if (k) o[k] = String(r[i]).trim(); }); return o; });
+  };
+  const people = buildPeople(read('Люди'));
+  const settings = read(SETTINGS_SHEET);
+  const ids = chatIds_();
+  const out = [];
+  const sentTo = [];
+  (items || []).slice(0, 30).forEach(function (it) {
+    const p = people.find(function (x) { return x.keys.indexOf(normHandle(it.key)) >= 0; });
+    if (!p) { out.push({ key: it.key, error: 'not_found' }); return; }
+    const chatId = p.keys.find(function (k) { return /^\d+$/.test(k); }) || findSettings(settings, p).chatId || String(ids[p.key] || '');
+    if (!/^\d+$/.test(chatId)) { out.push({ key: it.key, name: p.name, error: 'no_chat' }); return; }
+    let code = 0;
+    const images = (it.images || []).slice(0, 10);
+    for (let i = 0; i < images.length; i++) {
+      const blob = Utilities.newBlob(Utilities.base64Decode(String(images[i]).replace(/^data:image\/png;base64,/, '')), 'image/png', 'result-' + (i + 1) + '.png');
+      try {
+        code = UrlFetchApp.fetch('https://api.telegram.org/bot' + token + '/sendPhoto', {
+          method: 'post',
+          muteHttpExceptions: true,
+          payload: { chat_id: chatId, photo: blob, caption: i === 0 ? String(it.caption || '').slice(0, 1000) : '' },
+        }).getResponseCode();
+      } catch (err) {
+        console.error(err);
+        code = 0;
+      }
+      if (code !== 200) break;
+    }
+    if (code === 200) sentTo.push(p.name);
+    out.push({ key: it.key, name: p.name, error: code === 200 ? '' : code === 403 ? 'blocked' : 'send_' + code });
+  });
+  if (sentTo.length) {
+    logAction_({ name: 'Админ-панель' }, { label: Session.getActiveUser().getEmail() }, 'Админ отправил результаты тренировки', sentTo.join(', '));
+  }
+  return out;
+}

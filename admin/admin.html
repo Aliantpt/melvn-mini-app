@@ -4,6 +4,8 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>M-ELVN — админ-панель</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Unbounded:wght@400;700&display=swap" rel="stylesheet">
 <style>
   :root {
     --orange: #ff5a00; --carbon: #101011; --white: #ffffff;
@@ -97,6 +99,10 @@
   .modal > div { background: var(--bg); border-radius: 14px; padding: 18px; max-width: 380px; width: 100%; }
   .modal p { margin: 0 0 16px; }
   .modal .actions { position: static; margin: 0; padding: 0; background: none; justify-content: flex-end; }
+  .previews { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 14px; }
+  .previews figure { margin: 0; }
+  .previews figcaption { font-size: 12px; color: var(--hint); margin-bottom: 6px; }
+  canvas.preview { width: 100%; height: auto; border-radius: 10px; display: block; }
   @media (max-width: 760px) {
     .layout { flex-direction: column; }
     nav { width: auto; display: flex; gap: 4px; overflow-x: auto; border-right: 0; border-bottom: 1px solid var(--line); padding: 8px 12px; }
@@ -339,7 +345,7 @@
   // ---- Навигация ----
   const SECTIONS = [
     ['events', 'Гонки'], ['trainings', 'Тренировки'], ['people', 'Люди'],
-    ['champs', 'Чемпионаты'], ['income', 'Заработок'], ['archive', 'Архив'], ['history', 'История'],
+    ['champs', 'Чемпионаты'], ['income', 'Заработок'], ['results', 'Результаты'], ['archive', 'Архив'], ['history', 'История'],
   ];
   function counts() {
     return {
@@ -350,6 +356,7 @@
       income: objects('Заработок').length,
       archive: groupEvents('Архив событий').length + trainings('Архив тренировок').length,
       history: objects('История действий').length,
+      results: res.heats.length || '',
     };
   }
   function render() {
@@ -357,11 +364,12 @@
     $('#nav').innerHTML = SECTIONS.map((s) => '<button class="' + (s[0] === section ? 'on' : '') + '" data-sec="' + s[0] + '">' + s[1] + ' <span class="cnt">' + c[s[0]] + '</span></button>').join('');
     $$('[data-sec]').forEach((b) => (b.onclick = () => { section = b.dataset.sec; ui.q = ''; render(); }));
     const m = $('#main');
-    m.innerHTML = ({ events: eventsView, trainings: trainingsView, people: peopleView, champs: champsView, income: incomeView, archive: archiveView, history: historyView })[section]();
+    m.innerHTML = ({ events: eventsView, trainings: trainingsView, people: peopleView, champs: champsView, income: incomeView, results: resultsView, archive: archiveView, history: historyView })[section]();
     bindToolbar();
     if (section === 'champs') bindChamps();
     if (section === 'income') bindIncome();
     if (section === 'history') bindHistory();
+    if (section === 'results') bindResults();
   }
 
   function toolbar(addLabel, extra) {
@@ -610,7 +618,7 @@
       field('Ник в Telegram', input('Telegram', o['Telegram'] || '', 'placeholder="без @"')) +
       field('Telegram ID', input('Telegram ID', o['Telegram ID'] || '', 'inputmode="numeric" placeholder="если нет ника"')) +
       field('Телефон', input('Телефон', o['Телефон'] || '')) +
-      '<div></div>' +
+      field('Ник в хронометраже', input('Ник в хронометраже', o['Ник в хронометраже'] || '', 'placeholder="как на timing.batyrshin.name"')) +
       '<div class="field wide"><label>Роли</label><div class="checks">' +
       ['Пилот', 'Менеджер', 'Руководство'].map((r) => '<label class="check"><input type="checkbox" name="' + r + '"' + (yes(o[r]) ? ' checked' : '') + '>' + r + '</label>').join('') +
       '<label class="check"><input type="checkbox" name="Активен"' + (String(o['Активен'] || '').trim().toLowerCase() !== 'нет' ? ' checked' : '') + '>Активен (есть доступ к приложению)</label></div></div>' +
@@ -732,6 +740,8 @@
       toolbar('') + '<div class="box"><h3>Гонки (' + ev.length + ')</h3>' + (ev.sort(sort).map((g) => item(g, 'гонка')).join('') || '<div class="hint">Пусто</div>') + '</div>' +
       '<div class="box"><h3>Тренировки (' + tr.length + ')</h3>' + (tr.sort(sort).map((t) => item(t, 'тренировка')).join('') || '<div class="hint">Пусто</div>') + '</div>';
   }
+
+/*@RESULTS_JS@*/
 
   $('#reload').onclick = () => { load(); toast('Обновлено'); };
   load();

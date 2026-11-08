@@ -332,6 +332,23 @@ function sendReminders() {
   }
 }
 
+// Telegram ID людей, открывавших приложение: нужны, чтобы бот мог написать тем, у кого в «Людях» только ник.
+function chatIds_() {
+  try {
+    return JSON.parse(PropertiesService.getScriptProperties().getProperty('chat_ids') || '{}');
+  } catch (err) {
+    return {};
+  }
+}
+function rememberChat_(me, user) {
+  const id = String(Number(user.id) || '');
+  if (!id || !me || !me.key) return;
+  const ids = chatIds_();
+  if (ids[me.key] === id) return;
+  ids[me.key] = id;
+  PropertiesService.getScriptProperties().setProperty('chat_ids', JSON.stringify(ids));
+}
+
 // Запустите один раз в редакторе Apps Script (выбрать функцию → «Выполнить»):
 // разрешит боту отправлять сообщения и включит таймер напоминаний.
 function setupReminders() {
@@ -426,7 +443,14 @@ function logOpen_(view, user) {
   const k = 'open:' + user.id;
   if (cache.get(k)) return;
   cache.put(k, '1', 600);
-  if (view.access) logAction_({ name: view.me.name }, user, 'Открыл приложение', '');
+  if (view.access) {
+    try {
+      rememberChat_(view.me, user);
+    } catch (err) {
+      console.error(err);
+    }
+    logAction_({ name: view.me.name }, user, 'Открыл приложение', '');
+  }
   else logAction_(null, user, 'Попытка входа без доступа', 'Нет на листе «Люди» или «Активен» = Нет');
 }
 

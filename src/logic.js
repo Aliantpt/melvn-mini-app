@@ -607,7 +607,7 @@ export function buildView(data, tgUser, timezone) {
   const races = managedRaces(allEvents, person);
   return {
     access: true,
-    me: { name: person.name, roles: person.roles },
+    me: { name: person.name, key: person.key, roles: person.roles },
     events,
     trainings: openTrainings,
     settings: (({ races, trainings: tr }) => ({ races, trainings: tr }))(findSettings(data['Настройки уведомлений'], person)),
