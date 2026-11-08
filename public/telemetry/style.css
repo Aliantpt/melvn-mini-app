@@ -180,6 +180,13 @@ select.input { appearance: none; padding-right: 30px; background-image: linear-g
 .picked .sub { color: var(--hint); font-size: 12.5px; }
 
 /* Круги */
+.trim { margin-bottom: 18px; padding-bottom: 16px; border-bottom: 1px solid var(--line); }
+.trim .note { margin: 0 0 10px; }
+.trim .fit { margin-bottom: 10px; }
+.sub-h { margin: 0 0 10px; }
+.brk { display: inline-block; width: 7px; height: 12px; border: 2px solid var(--white); }
+.brk.a { border-right: 0; }
+.brk.b { border-left: 0; }
 .howto { margin: 0 0 16px; padding-left: 20px; color: #d8d8dc; }
 .howto li { margin-bottom: 6px; }
 .howto li::marker { color: var(--orange); font-weight: 700; }
