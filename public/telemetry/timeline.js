@@ -8,7 +8,8 @@ const C = {
 };
 
 export class Timeline {
-  // get() → { duration, time, laps, markers, bestIdx }; on: { seek(t), moveEdge(idx, t), moveMarker(idx, t), dragEnd() }
+  // get() → { duration, time, laps, markers, bestIdx, joints, trim: { a, b } };
+  // on: { seek(t), moveEdge(idx, t), moveMarker(idx, t), moveTrim('a' | 'b', t), dragEnd() }
   constructor(canvas, get, on) {
     this.c = canvas;
     this.ctx = canvas.getContext('2d');
@@ -63,6 +64,30 @@ export class Timeline {
   x(t) { return ((t - this.from) / (this.to - this.from || 1)) * this.w; }
   t(x) { return this.from + (x / this.w) * (this.to - this.from); }
 
+  // Ручки обрезки: начало (a) и конец (b) сохраняемого видео.
+  hitTrim(px) {
+    const tr = this.get().trim || {};
+    let best = null;
+    let bd = 9;
+    ['a', 'b'].forEach((k) => {
+      if (tr[k] == null) return;
+      const d = Math.abs(this.x(tr[k]) - px);
+      if (d < bd) { bd = d; best = k; }
+    });
+    return best;
+  }
+  // Что под курсором: метка круга, ручка обрезки или ничего. В полосе шкалы ручки обрезки важнее.
+  hitAny(p) {
+    if (p.y <= 22) {
+      const k = this.hitTrim(p.x);
+      return k ? { kind: 'trim', k } : null;
+    }
+    const m = this.hitMarker(p.x);
+    if (m >= 0) return { kind: 'marker', idx: m };
+    const k = this.hitTrim(p.x);
+    return k ? { kind: 'trim', k } : null;
+  }
+
   hitMarker(px) {
     const { markers } = this.get();
     let best = -1;
@@ -83,22 +108,25 @@ export class Timeline {
       if (!this.get().duration) return;
       c.setPointerCapture(e.pointerId);
       const p = pos(e);
-      const m = p.y > 22 ? this.hitMarker(p.x) : -1;
-      this.drag = m >= 0 ? { kind: 'marker', idx: m } : { kind: 'seek' };
+      this.drag = this.hitAny(p) || { kind: 'seek' };
       if (this.drag.kind === 'seek') this.on.seek(Math.max(0, Math.min(this.get().duration, this.t(p.x))));
       e.preventDefault();
     });
     c.addEventListener('pointermove', (e) => {
       const p = pos(e);
       if (!this.drag) {
-        const m = p.y > 22 ? this.hitMarker(p.x) : -1;
-        if (m !== this.hover) { this.hover = m; this.draw(); }
-        c.style.cursor = m >= 0 ? 'ew-resize' : 'pointer';
+        const h = this.hitAny(p);
+        const hv = h ? (h.kind === 'marker' ? h.idx : h.k) : -1;
+        if (hv !== this.hover) { this.hover = hv; this.draw(); }
+        c.style.cursor = h ? 'ew-resize' : 'pointer';
         return;
       }
       const t = Math.max(0, Math.min(this.get().duration, this.t(p.x)));
       if (this.drag.kind === 'seek') this.on.seek(t);
-      else {
+      else if (this.drag.kind === 'trim') {
+        this.on.moveTrim(this.drag.k, t);
+        this.on.seek(t, true);
+      } else {
         const { markers } = this.get();
         if (this.drag.idx === 0 || this.drag.idx === markers.length - 1) this.on.moveEdge(this.drag.idx, t);
         else this.on.moveMarker(this.drag.idx, t);
@@ -106,7 +134,7 @@ export class Timeline {
       }
     });
     const end = () => {
-      if (this.drag && this.drag.kind === 'marker' && this.on.dragEnd) this.on.dragEnd();
+      if (this.drag && this.drag.kind !== 'seek' && this.on.dragEnd) this.on.dragEnd();
       this.drag = null;
       this.draw();
     };
@@ -135,7 +163,7 @@ export class Timeline {
 
   draw() {
     const g = this.ctx;
-    const { duration, time, laps, markers, bestIdx, joints } = this.get();
+    const { duration, time, laps, markers, bestIdx, joints, trim } = this.get();
     const W = this.w;
     const H = this.h;
     if (!W || !H) return;
@@ -243,6 +271,30 @@ export class Timeline {
       g.textAlign = 'left';
       g.fillText('стык', x + 3, top + laneH - 4);
     });
+
+    // Обрезка: всё, что не попадёт в готовое видео, затемнено.
+    const tr = trim || {};
+    if (tr.a != null || tr.b != null) {
+      const xa = tr.a != null ? this.x(tr.a) : -1;
+      const xb = tr.b != null ? this.x(tr.b) : W + 1;
+      g.fillStyle = 'rgba(9,9,10,0.72)';
+      if (xa > 0) g.fillRect(0, 0, Math.min(W, xa), H);
+      if (xb < W) g.fillRect(Math.max(0, xb), 0, W - Math.max(0, xb), H);
+      [['a', xa], ['b', xb]].forEach(([k, x]) => {
+        if (tr[k] == null || x < -8 || x > W + 8) return;
+        const hot = this.hover === k || (this.drag && this.drag.k === k);
+        x = Math.round(x);
+        g.fillStyle = hot ? '#ffffff' : '#e8e8ea';
+        g.fillRect(x - 1.5, 0, 3, H);
+        // Скоба: у начала открыта вправо, у конца — влево.
+        const dir = k === 'a' ? 1 : -1;
+        g.fillRect(dir > 0 ? x - 1.5 : x - 8.5, 0, 10, 3);
+        g.fillRect(dir > 0 ? x - 1.5 : x - 8.5, H - 3, 10, 3);
+        g.font = '600 10px Onest, system-ui, sans-serif';
+        g.textAlign = dir > 0 ? 'left' : 'right';
+        g.fillText(k === 'a' ? 'начало' : 'конец', x + dir * 6, 14);
+      });
+    }
 
     // Курсор воспроизведения.
     const px = Math.round(this.x(time)) + 0.5;

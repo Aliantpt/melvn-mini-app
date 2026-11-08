@@ -22,6 +22,7 @@ const S = {
   laps: [],
   origLaps: [],
   markers: [],
+  trim: { a: null, b: null }, // обрезка: что войдёт в готовое видео (время на общей дорожке)
   style: mergeStyle(store.get('tele:style')),
   step: 'video',
   exporting: null,
@@ -70,7 +71,7 @@ function saveProject() {
   clearTimeout(saveTimer);
   saveTimer = setTimeout(() => {
     const k = projKey();
-    const data = { heatUrl: $('#heat-url').value, heat: S.heat, kart: S.kart, laps: S.laps, origLaps: S.origLaps, markers: S.markers };
+    const data = { heatUrl: $('#heat-url').value, heat: S.heat, kart: S.kart, laps: S.laps, origLaps: S.origLaps, markers: S.markers, trim: S.trim };
     store.set('tele:last', { heatUrl: data.heatUrl, kart: S.kart });
     if (k && store.set(k, data)) flashSaved();
   }, 400);
@@ -198,13 +199,17 @@ async function setSegments(segs, prevKey) {
     S.laps = saved.laps || [];
     S.origLaps = saved.origLaps || S.laps.map((l) => Object.assign({}, l));
     S.markers = saved.markers || [];
+    S.trim = saved.trim || { a: null, b: null };
     S.driver = S.heat ? S.heat.drivers.find((d) => d.kart === S.kart) || null : null;
     if (saved.heatUrl) $('#heat-url').value = saved.heatUrl;
     $('#heat-kart').value = S.kart;
     toast('Вернул круги и метки для этого видео');
   } else if (key !== prevKey) {
-    if (kept == null) S.markers = [];
-    else if (kept) S.markers = S.markers.map((m) => m + kept);
+    if (kept == null) { S.markers = []; S.trim = { a: null, b: null }; }
+    else if (kept) {
+      S.markers = S.markers.map((m) => m + kept);
+      S.trim = { a: S.trim.a == null ? null : S.trim.a + kept, b: S.trim.b == null ? null : S.trim.b + kept };
+    }
   }
   timeline.setView(0, S.meta.duration);
   if (S.markers.length) zoomToHeat();
@@ -277,8 +282,9 @@ async function reorder(segs) {
   const prevKey = projKey();
   const hadMarks = S.markers.length > 0;
   S.markers = [];
+  S.trim = { a: null, b: null };
   await setSegments(segs, prevKey);
-  if (hadMarks) toast('Порядок частей изменился — поставьте старт и финиш заново');
+  if (hadMarks) toast('Порядок частей изменился — поставьте метки и обрезку заново');
 }
 
 $('#video-file').onchange = (e) => { openVideos(e.target.files, false); e.target.value = ''; };
@@ -375,8 +381,13 @@ function scheduleRender() {
   rafPending = true;
   requestAnimationFrame(() => { rafPending = false; renderFrame(); });
 }
+let loopPrev = 0;
 function loop() {
   if (video.paused || video.ended) { $('#play').classList.remove('playing'); renderFrame(); return; }
+  // Дошли до конца обрезки — останавливаемся, как в готовом видео.
+  const now = curTime();
+  if (S.trim.b != null && loopPrev < S.trim.b && now >= S.trim.b) { video.pause(); loopPrev = now; return; }
+  loopPrev = now;
   renderFrame();
   timeline.follow(curTime());
   requestAnimationFrame(loop);
@@ -426,6 +437,7 @@ const timeline = new Timeline($('#timeline'), () => ({
   markers: S.markers,
   bestIdx: (bestOf(S.laps) || { i: -1 }).i,
   joints: S.segs.slice(1).map((x) => x.offset),
+  trim: S.trim,
 }), {
   seek: (t) => { video.pause(); seek(t); },
   moveEdge: (idx, t) => {
@@ -434,8 +446,66 @@ const timeline = new Timeline($('#timeline'), () => ({
     scheduleRender();
   },
   moveMarker: (idx, t) => { S.markers = moveMarker(S.markers, idx, t); scheduleRender(); },
+  moveTrim: (k, t) => { setTrim(k, t, true); },
   dragEnd: () => { saveProject(); renderLaps(); },
 });
+
+// ---- Обрезка ----
+// Начало и конец готового видео. Между ними должно оставаться хотя бы 2 секунды.
+function setTrim(k, t, quiet) {
+  if (!S.meta) return;
+  const d = S.meta.duration;
+  t = Math.max(0, Math.min(d, t));
+  if (k === 'a') {
+    if (S.trim.b != null && t > S.trim.b - 2) { if (!quiet) toast('Начало должно быть раньше конца', true); t = Math.max(0, S.trim.b - 2); }
+    S.trim.a = t < 0.05 ? null : t;
+  } else {
+    if (S.trim.a != null && t < S.trim.a + 2) { if (!quiet) toast('Конец должен быть позже начала', true); t = Math.min(d, S.trim.a + 2); }
+    S.trim.b = t > d - 0.05 ? null : t;
+  }
+  if (quiet) { scheduleRender(); renderTrim(); return; }
+  afterTrim(k === 'a' ? 'Начало видео: ' + fmtClock(t, 1) : 'Конец видео: ' + fmtClock(t, 1));
+}
+function trimToHeat() {
+  if (S.markers.length < 2) return toast('Сначала поставьте старт и финиш заезда', true);
+  const pad = 5;
+  S.trim = { a: null, b: null };
+  setTrim('a', S.markers[0] - pad, true);
+  setTrim('b', S.markers[S.markers.length - 1] + pad, true);
+  afterTrim('Видео обрезано по заезду, по 5 секунд до старта и после финиша');
+}
+function afterTrim(msg) {
+  if (msg) toast(msg);
+  saveProject();
+  renderTrim();
+  scheduleRender();
+}
+function renderTrim() {
+  const box = $('#trim-box');
+  if (!box) return;
+  if (!S.meta) { box.innerHTML = ''; return; }
+  const d = S.meta.duration;
+  const a = S.trim.a == null ? 0 : S.trim.a;
+  const b = S.trim.b == null ? d : S.trim.b;
+  const cut = S.trim.a != null || S.trim.b != null;
+  box.innerHTML = '<section class="trim">' +
+    '<h3>Обрезка видео</h3>' +
+    '<p class="note">Уберите посадку в карт и выход из него: отметьте, с какого кадра начать готовое видео и на каком закончить. Ручки обрезки можно двигать на таймлайне.</p>' +
+    '<div class="fit' + (cut ? ' good' : '') + '">' + (cut
+      ? 'В готовое видео войдёт <b>' + fmtClock(a, 1) + ' – ' + fmtClock(b, 1) + '</b>, это <b>' + fmtClock(b - a, 0) + '</b> из ' + fmtClock(d, 0) + '.'
+      : 'Видео не обрезано: войдёт целиком, <b>' + fmtClock(d, 0) + '</b>.') + '</div>' +
+    '<div class="btn-row trim-btns">' +
+    '<button class="btn ghost small" type="button" id="trim-a" title="Клавиша I"><i class="brk a"></i>Начало здесь</button>' +
+    '<button class="btn ghost small" type="button" id="trim-b" title="Клавиша O">Конец здесь<i class="brk b"></i></button>' +
+    (S.markers.length > 1 ? '<button class="btn ghost small" type="button" id="trim-heat">По заезду ±5 с</button>' : '') +
+    (cut ? '<button class="btn ghost small" type="button" id="trim-go">К началу</button><button class="btn ghost small" type="button" id="trim-clear">Без обрезки</button>' : '') +
+    '</div></section>';
+  $('#trim-a').onclick = () => setTrim('a', curTime());
+  $('#trim-b').onclick = () => setTrim('b', curTime());
+  if ($('#trim-heat')) $('#trim-heat').onclick = trimToHeat;
+  if ($('#trim-go')) $('#trim-go').onclick = () => { video.pause(); seek(a); };
+  if ($('#trim-clear')) $('#trim-clear').onclick = () => { S.trim = { a: null, b: null }; afterTrim('Обрезка убрана'); };
+}
 function zoomToHeat() {
   if (!S.markers.length || !S.meta) return;
   const a = S.markers[0];
@@ -591,6 +661,7 @@ function refit() {
   S.markers = fitMarkers(S.laps, S.markers[0], S.markers[S.markers.length - 1]);
 }
 function renderLaps() {
+  renderTrim();
   const fit = $('#fit-box');
   const box = $('#laps-box');
   if (!S.laps.length) {
@@ -786,7 +857,9 @@ $('#style-reset').onclick = () => { S.style = mergeStyle(DEFAULT_STYLE); fillDes
 
 // ---- Экспорт ----
 function exportRange() {
-  const all = $('#ex-range').value === 'all' || S.markers.length < 2;
+  const mode = $('#ex-range').value;
+  if (mode === 'trim') return { from: S.trim.a == null ? 0 : S.trim.a, to: S.trim.b == null ? S.meta.duration : S.trim.b };
+  const all = mode === 'all' || S.markers.length < 2;
   if (all) return { from: 0, to: S.meta.duration };
   const pad = Number($('#ex-pad').value);
   return { from: Math.max(0, S.markers[0] - pad), to: Math.min(S.meta.duration, S.markers[S.markers.length - 1] + pad) };
@@ -798,9 +871,15 @@ function outSize() {
   if (want && want < Math.min(W, H)) { const k = want / Math.min(W, H); W = Math.round((W * k) / 2) * 2; H = Math.round((H * k) / 2) * 2; }
   return { W, H };
 }
+let rangeTouched = false;
 function renderExport() {
+  const sel = $('#ex-range');
+  const cut = S.trim.a != null || S.trim.b != null;
+  sel.querySelector('[value="trim"]').disabled = !cut;
+  // По умолчанию сохраняем то, что обрезали на шаге 3.
+  if (!rangeTouched || (sel.value === 'trim' && !cut)) sel.value = cut ? 'trim' : 'heat';
   $('#ex-pad-out').textContent = $('#ex-pad').value + ' с';
-  $('#ex-pad-row').hidden = $('#ex-range').value === 'all';
+  $('#ex-pad-row').hidden = sel.value !== 'heat';
   const sum = $('#ex-summary');
   const go = $('#ex-go');
   if (!S.meta) { sum.textContent = 'Сначала откройте видео.'; go.disabled = true; return; }
@@ -811,6 +890,7 @@ function renderExport() {
   sum.innerHTML = 'Будет сохранено <b>' + fmtClock(r.to - r.from, 0) + '</b> видео, с ' + fmtClock(r.from, 0) + ' по ' + fmtClock(r.to, 0) + ', кадр <b>' + W + '×' + H + '</b>.' + warn;
 }
 ['ex-range', 'ex-pad', 'ex-size', 'ex-quality', 'ex-mode'].forEach((id) => $('#' + id).addEventListener('input', renderExport));
+$('#ex-range').addEventListener('input', () => { rangeTouched = true; });
 
 function download(blob, name) {
   const a = document.createElement('a');
@@ -900,6 +980,8 @@ document.addEventListener('keydown', (e) => {
   else if (k === 'ArrowRight') { e.preventDefault(); step(e.shiftKey ? (S.meta ? S.meta.fps : 30) : 1); }
   else if (k === 's' || k === 'S' || k === 'ы' || k === 'Ы') { e.preventDefault(); setStart(); }
   else if (k === 'f' || k === 'F' || k === 'а' || k === 'А') { e.preventDefault(); setEnd(); }
+  else if (k === 'i' || k === 'I' || k === 'ш' || k === 'Ш') { e.preventDefault(); setTrim('a', curTime()); }
+  else if (k === 'o' || k === 'O' || k === 'щ' || k === 'Щ') { e.preventDefault(); setTrim('b', curTime()); }
   else if (k === '[' || k === ']' || k === 'х' || k === 'ъ') {
     if (!S.markers.length) return;
     e.preventDefault();
