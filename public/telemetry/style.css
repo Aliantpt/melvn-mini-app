@@ -146,6 +146,17 @@ select.input { appearance: none; padding-right: 30px; background-image: linear-g
 .facts dd { margin: 0; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
 .warn { background: rgba(255, 82, 87, .1); border: 1px solid rgba(255, 82, 87, .35); color: #ffc4c6; padding: 10px 12px; border-radius: 10px; margin-bottom: 14px; font-size: 13px; }
 
+.parts { list-style: none; margin: 0 0 6px; padding: 0; counter-reset: part; }
+.parts li { display: grid; grid-template-columns: 22px 1fr auto; grid-template-rows: auto auto; column-gap: 8px; align-items: center; padding: 7px 0; border-top: 1px solid var(--line); counter-increment: part; }
+.parts li::before { content: counter(part); grid-row: span 2; font: 700 12px/1 var(--display); color: var(--orange); }
+.parts .p-name { overflow-wrap: anywhere; font-weight: 600; }
+.parts .p-time { grid-column: 2; color: var(--hint); font-size: 12px; font-variant-numeric: tabular-nums; }
+.parts .p-btns { grid-column: 3; grid-row: 1 / span 2; display: flex; gap: 2px; }
+.parts .x { background: none; border: 0; color: var(--hint); width: 28px; height: 28px; border-radius: 7px; }
+.parts .x:hover:not(:disabled) { color: var(--white); background: var(--bg3); }
+.parts .x:disabled { opacity: .3; cursor: default; }
+[data-pane="video"] .btn-row { flex-direction: column; }
+
 /* Заезд */
 .fallback { margin: 14px 0 6px; color: var(--hint); }
 .fallback summary { cursor: pointer; font-size: 13px; }
