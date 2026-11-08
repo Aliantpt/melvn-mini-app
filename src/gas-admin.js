@@ -172,7 +172,7 @@ function admin_timing(url) {
   return { url: url, html: res.getContentText('UTF-8').slice(0, 3000000) };
 }
 
-// Отправка картинок с результатами. items: [{key: ник или ID из «Людей», images: [base64 PNG], caption}].
+// Отправка результатов. items: [{key: ник или ID из «Людей», pdf: base64, fileName, caption}].
 function admin_sendResults(items) {
   if (!isOwner_()) throw new Error('Нет доступа');
   const token = botToken();
@@ -200,21 +200,19 @@ function admin_sendResults(items) {
     if (!p) { out.push({ key: it.key, error: 'not_found' }); return; }
     const chatId = p.keys.find(function (k) { return /^\d+$/.test(k); }) || findSettings(settings, p).chatId || p.keys.map(function (k) { return ids[k]; }).filter(Boolean)[0] || '';
     if (!/^\d+$/.test(chatId)) { out.push({ key: it.key, name: p.name, error: 'no_chat' }); return; }
+    // Один PDF со всеми заездами пилота.
     let code = 0;
-    const images = (it.images || []).slice(0, 10);
-    for (let i = 0; i < images.length; i++) {
-      const blob = Utilities.newBlob(Utilities.base64Decode(String(images[i]).replace(/^data:image\/png;base64,/, '')), 'image/png', 'result-' + (i + 1) + '.png');
-      try {
-        code = UrlFetchApp.fetch('https://api.telegram.org/bot' + token + '/sendPhoto', {
-          method: 'post',
-          muteHttpExceptions: true,
-          payload: { chat_id: chatId, photo: blob, caption: i === 0 ? String(it.caption || '').slice(0, 1000) : '' },
-        }).getResponseCode();
-      } catch (err) {
-        console.error(err);
-        code = 0;
-      }
-      if (code !== 200) break;
+    const pdf = Utilities.newBlob(Utilities.base64Decode(String(it.pdf || '')), 'application/pdf',
+      String(it.fileName || 'M-ELVN_training.pdf').replace(/[^\w.-]+/g, '_'));
+    try {
+      code = UrlFetchApp.fetch('https://api.telegram.org/bot' + token + '/sendDocument', {
+        method: 'post',
+        muteHttpExceptions: true,
+        payload: { chat_id: chatId, document: pdf, caption: String(it.caption || '').slice(0, 1000) },
+      }).getResponseCode();
+    } catch (err) {
+      console.error(err);
+      code = 0;
     }
     if (code === 200) sentTo.push(p.name);
     out.push({ key: it.key, name: p.name, error: code === 200 ? '' : code === 403 ? 'blocked' : 'send_' + code });

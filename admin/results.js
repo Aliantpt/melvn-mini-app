@@ -56,7 +56,7 @@
     const sel = '<select class="input" id="r-title" style="min-width:240px"><option value="">Подпись: только трасса и дата</option>' +
       titles.map((x) => { const v = x.title + ' · ' + fmtDate(x.date); return '<option' + (v === res.title ? ' selected' : '') + '>' + esc(v) + '</option>'; }).join('') + '</select>';
     let html = '<h1>Результаты тренировки</h1>' +
-      '<div class="hint" style="margin:-6px 0 14px">Вставьте ссылки на заезды с timing.batyrshin.name, отметьте пилотов, и бот пришлёт каждому картинку с его результатами.</div>' +
+      '<div class="hint" style="margin:-6px 0 14px">Вставьте ссылки на заезды с timing.batyrshin.name, отметьте пилотов, и бот пришлёт каждому PDF с его результатами: страница на каждый заезд.</div>' +
       '<div class="box" style="margin-top:0"><textarea class="input" id="r-links" placeholder="https://timing.batyrshin.name/tracks/drive/heats/123456&#10;по одной ссылке в строке">' + esc(res.links) + '</textarea>' +
       '<div class="bar" style="margin:10px 0 0">' + sel + '<div class="spacer"></div><button class="btn" id="r-load"' + (res.loading ? ' disabled' : '') + '>' + (res.loading ? 'Загружаю…' : 'Загрузить заезды') + '</button></div></div>';
     if (!res.heats.length) return html;
@@ -474,19 +474,57 @@
     res.rendered = out;
   }
 
+  // Простой PDF без библиотек: каждая картинка — отдельная страница (JPEG).
+  function pdfFromCanvases(canvases) {
+    const enc = (str) => { const b = new Uint8Array(str.length); for (let i = 0; i < str.length; i++) b[i] = str.charCodeAt(i) & 255; return b; };
+    const parts = [];
+    const offsets = [];
+    let size = 0;
+    const push = (x) => { const b = typeof x === 'string' ? enc(x) : x; parts.push(b); size += b.length; };
+    const obj = (n, body) => { offsets[n] = size; push(n + ' 0 obj\n'); body.forEach(push); push('\nendobj\n'); };
+    const n = canvases.length;
+    push('%PDF-1.4\n%\xe2\xe3\xcf\xd3\n');
+    obj(1, ['<< /Type /Catalog /Pages 2 0 R >>']);
+    obj(2, ['<< /Type /Pages /Count ' + n + ' /Kids [' + canvases.map((c, i) => (3 + i * 3) + ' 0 R').join(' ') + '] >>']);
+    canvases.forEach((cv, i) => {
+      const page = 3 + i * 3;
+      const w = (cv.width * 0.75).toFixed(2);
+      const h = (cv.height * 0.75).toFixed(2);
+      const jpeg = enc(atob(cv.toDataURL('image/jpeg', 0.92).split(',')[1]));
+      const draw = 'q ' + w + ' 0 0 ' + h + ' 0 0 cm /Im0 Do Q';
+      obj(page, ['<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ' + w + ' ' + h + '] /Resources << /XObject << /Im0 ' + (page + 1) + ' 0 R >> >> /Contents ' + (page + 2) + ' 0 R >>']);
+      obj(page + 1, ['<< /Type /XObject /Subtype /Image /Width ' + cv.width + ' /Height ' + cv.height + ' /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ' + jpeg.length + ' >>\nstream\n', jpeg, '\nendstream']);
+      obj(page + 2, ['<< /Length ' + draw.length + ' >>\nstream\n' + draw + '\nendstream']);
+    });
+    const total = 3 + n * 3;
+    const xref = size;
+    let table = 'xref\n0 ' + total + '\n0000000000 65535 f \n';
+    for (let i = 1; i < total; i++) table += String(offsets[i]).padStart(10, '0') + ' 00000 n \n';
+    push(table + 'trailer\n<< /Size ' + total + ' /Root 1 0 R >>\nstartxref\n' + xref + '\n%%EOF\n');
+    const all = new Uint8Array(size);
+    let pos = 0;
+    parts.forEach((b) => { all.set(b, pos); pos += b.length; });
+    let bin = '';
+    for (let i = 0; i < all.length; i += 0x8000) bin += String.fromCharCode.apply(null, all.subarray(i, i + 0x8000));
+    return btoa(bin);
+  }
+
   async function sendResults() {
     const list = res.rendered || [];
     if (!list.length) return;
     const byPerson = new Map();
     list.forEach((x) => {
-      if (!byPerson.has(x.p.person.key)) byPerson.set(x.p.person.key, { key: x.p.person.key, name: x.p.person.name, images: [] });
-      byPerson.get(x.p.person.key).images.push(x.cv.toDataURL('image/png'));
+      if (!byPerson.has(x.p.person.key)) byPerson.set(x.p.person.key, { key: x.p.person.key, name: x.p.person.name, pages: [], date: x.p.heat.date });
+      byPerson.get(x.p.person.key).pages.push(x.cv);
     });
+    // Каждому пилоту — один PDF: страница на каждый заезд.
     const items = Array.from(byPerson.values()).map((x) => ({
-      key: x.key, images: x.images,
-      caption: '🏁 Результаты тренировки' + (res.title ? ': ' + res.title : '') + (x.images.length > 1 ? ' (заездов: ' + x.images.length + ')' : ''),
+      key: x.key,
+      pdf: pdfFromCanvases(x.pages),
+      fileName: 'M-ELVN_training_' + (x.date || today()) + '.pdf',
+      caption: '🏁 Результаты тренировки' + (res.title ? ': ' + res.title : '') + (x.pages.length > 1 ? ' (заездов: ' + x.pages.length + ')' : ''),
     }));
-    if (!(await confirmBox('Отправить картинки: ' + items.map((x) => byPerson.get(x.key).name + ' (' + x.images.length + ')').join(', ') + '?', 'Отправить'))) return;
+    if (!(await confirmBox('Отправить PDF: ' + Array.from(byPerson.values()).map((x) => x.name + ' (заездов: ' + x.pages.length + ')').join(', ') + '?', 'Отправить'))) return;
     res.sending = true;
     render();
     try {
