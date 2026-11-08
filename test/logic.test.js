@@ -230,6 +230,11 @@ function loadGas(botToken, sheets, today = '2026-10-25', user = { active: '', ef
     console: { error() {}, log() {} },
     UrlFetchApp: {
       fetch: (url, opt) => {
+        if (/\/getUpdates/.test(url)) {
+          const off = Number((url.match(/offset=(\d+)/) || [])[1] || 0);
+          const result = tgUpdates.filter((u) => u.update_id >= off);
+          return { getResponseCode: () => 200, getContentText: () => JSON.stringify({ ok: true, result }) };
+        }
         fetched.push({ url, body: JSON.parse(opt.payload) });
         const r = responses.length ? responses.shift() : 200;
         if (r === 'throw') throw new Error('timeout');
@@ -237,6 +242,7 @@ function loadGas(botToken, sheets, today = '2026-10-25', user = { active: '', ef
       },
     },
   };
+  const tgUpdates = [];
   let uuid = 0;
   ctx.Utilities.getUuid = () => 'id' + ++uuid;
   function sheetApi(name) {
@@ -274,6 +280,7 @@ function loadGas(botToken, sheets, today = '2026-10-25', user = { active: '', ef
   doGet.ctx = ctx;
   doGet.fetched = fetched;
   doGet.responses = responses;
+  doGet.tgUpdates = tgUpdates;
   return doGet;
 }
 
@@ -650,4 +657,22 @@ test('Apps Script: app view comes from cache until the data changes', () => {
   row[1] = 'Иван Третий';
   const v = g({ initData, action: 'saveSettings', racesOn: '0', racesLead: '1 дн', trainingsOn: '0', trainingsLead: '02:00' });
   assert.equal(v.me.name, 'Иван Третий');
+});
+
+test('Apps Script: bot learns Telegram IDs of people who write to it, by nick', () => {
+  const sheets = JSON.parse(JSON.stringify(gasSheets));
+  const g = loadGas('123:ABC', sheets);
+  g.tgUpdates.push(
+    { update_id: 10, message: { from: { id: 4242, username: 'Oleg_Manager', is_bot: false }, text: '/start' } },
+    { update_id: 11, message: { from: { id: 5, username: 'somebot', is_bot: true }, text: 'x' } },
+    { update_id: 12, my_chat_member: { from: { id: 777, username: 'max_kart' } } },
+  );
+  g.ctx.sendReminders();
+  assert.equal(g.ctx.chatIds_().oleg_manager, '4242');
+  assert.equal(g.ctx.chatIds_().max_kart, '777');
+  assert.equal(g.ctx.chatIds_().somebot, undefined);
+  // Следующий запуск забирает только новые сообщения.
+  g.tgUpdates.push({ update_id: 13, message: { from: { id: 9, username: 'new_one' } } });
+  assert.equal(g.ctx.collectChats_('123:ABC'), 1);
+  assert.equal(g.ctx.collectChats_('123:ABC'), 0);
 });

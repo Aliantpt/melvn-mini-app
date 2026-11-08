@@ -287,6 +287,11 @@ function sendReminders() {
   const lock = LockService.getScriptLock();
   if (!lock.tryLock(5000)) return;
   try {
+    try {
+      collectChats_(token);
+    } catch (err) {
+      console.error(err);
+    }
     // Через кэш: заодно таймер каждые 5 минут держит кэш тёплым для приложения.
     const data = readSheetsCached();
     const log = ensureSheet(LOG_SHEET, ['Ключ', 'Отправлено'], ['Служебный лист: какие напоминания уже отправлены', '']);
@@ -339,6 +344,31 @@ function chatIds_() {
   } catch (err) {
     return {};
   }
+}
+// Telegram не даёт боту узнать ID человека по нику. Но каждый, кто пишет боту (в том числе
+// нажимает «Старт»), присылает свой ник и ID. Таймер каждые 5 минут забирает эти сообщения
+// и запоминает «ник → ID», чтобы бот мог писать людям, у которых в «Людях» указан только ник.
+function collectChats_(token) {
+  const props = PropertiesService.getScriptProperties();
+  const offset = Number(props.getProperty('tg_offset') || 0);
+  const res = UrlFetchApp.fetch('https://api.telegram.org/bot' + token + '/getUpdates?timeout=0&limit=100' +
+    (offset ? '&offset=' + offset : ''), { muteHttpExceptions: true });
+  if (res.getResponseCode() !== 200) return 0;
+  const updates = (JSON.parse(res.getContentText()).result) || [];
+  if (!updates.length) return 0;
+  const ids = chatIds_();
+  let changed = 0;
+  updates.forEach(function (u) {
+    const m = u.message || u.edited_message || u.my_chat_member || u.callback_query || {};
+    const from = m.from;
+    if (!from || from.is_bot || !from.username) return;
+    const key = normHandle(from.username);
+    const id = String(Number(from.id) || '');
+    if (key && id && ids[key] !== id) { ids[key] = id; changed++; }
+  });
+  if (changed) props.setProperty('chat_ids', JSON.stringify(ids));
+  props.setProperty('tg_offset', String(updates[updates.length - 1].update_id + 1));
+  return changed;
 }
 function rememberChat_(me, user) {
   const id = String(Number(user.id) || '');

@@ -187,13 +187,18 @@ function admin_sendResults(items) {
   };
   const people = buildPeople(read('Люди'));
   const settings = read(SETTINGS_SHEET);
+  try {
+    collectChats_(token);
+  } catch (err) {
+    console.error(err);
+  }
   const ids = chatIds_();
   const out = [];
   const sentTo = [];
   (items || []).slice(0, 30).forEach(function (it) {
     const p = people.find(function (x) { return x.keys.indexOf(normHandle(it.key)) >= 0; });
     if (!p) { out.push({ key: it.key, error: 'not_found' }); return; }
-    const chatId = p.keys.find(function (k) { return /^\d+$/.test(k); }) || findSettings(settings, p).chatId || String(ids[p.key] || '');
+    const chatId = p.keys.find(function (k) { return /^\d+$/.test(k); }) || findSettings(settings, p).chatId || p.keys.map(function (k) { return ids[k]; }).filter(Boolean)[0] || '';
     if (!/^\d+$/.test(chatId)) { out.push({ key: it.key, name: p.name, error: 'no_chat' }); return; }
     let code = 0;
     const images = (it.images || []).slice(0, 10);
