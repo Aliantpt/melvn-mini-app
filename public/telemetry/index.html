@@ -29,10 +29,10 @@
         <canvas id="preview" aria-label="Предпросмотр видео с телеметрией"></canvas>
         <video id="video" playsinline preload="auto" muted></video>
         <label class="drop" id="drop">
-          <input type="file" id="video-file" accept="video/*,.mp4,.mov,.mkv,.webm" hidden>
+          <input type="file" id="video-file" accept="video/*,.mp4,.mov,.mkv,.webm" multiple hidden>
           <span class="drop-mark" aria-hidden="true"></span>
           <span class="drop-title">Перетащите видео заезда сюда</span>
-          <span class="drop-sub">или нажмите, чтобы выбрать файл. Видео остаётся на вашем компьютере и никуда не загружается.</span>
+          <span class="drop-sub">или нажмите, чтобы выбрать. Если камера разрезала запись на части, выберите их все сразу. Видео остаётся на вашем компьютере.</span>
         </label>
         <div class="busy" id="busy" hidden><span></span></div>
       </div>
@@ -83,8 +83,12 @@
       <!-- 1. Видео -->
       <div class="pane" data-pane="video">
         <h2>Видео заезда</h2>
-        <div id="video-info" class="empty-note">Выберите файл с камеры: MP4 или MOV. Чем короче видео, тем быстрее экспорт, но обрезать заранее не нужно — сайт сам сохранит только заезд.</div>
-        <button class="btn wide" id="video-pick" type="button">Выбрать видео</button>
+        <div id="video-info" class="empty-note">Выберите файл с камеры: MP4 или MOV. Если камера разрезала запись на части, выберите их все сразу — сайт поставит их по порядку на одну дорожку.</div>
+        <input type="file" id="video-more" accept="video/*,.mp4,.mov,.mkv,.webm" multiple hidden>
+        <div class="btn-row">
+          <button class="btn wide" id="video-pick" type="button">Выбрать видео</button>
+          <button class="btn ghost wide" id="video-add" type="button" hidden>Добавить ещё часть</button>
+        </div>
       </div>
 
       <!-- 2. Заезд -->
@@ -316,7 +320,7 @@
     <form method="dialog"><button class="close" aria-label="Закрыть">×</button></form>
     <h2>Как наложить телеметрию</h2>
     <ol>
-      <li><b>Видео.</b> Выберите файл с камеры. Он не загружается в интернет: всё происходит в вашем браузере.</li>
+      <li><b>Видео.</b> Выберите файл с камеры. Если камера (например, GoPro) разрезала запись на части, выберите все части сразу: они встанут по порядку на одну дорожку. Видео не загружается в интернет: всё происходит в вашем браузере.</li>
       <li><b>Заезд.</b> Вставьте ссылку на заезд с timing.batyrshin.name и укажите номер своего карта. Круги и их время появятся сами.</li>
       <li><b>Круги.</b> Поставьте метку старта на кадр, где карт пересекает линию перед первым кругом, и метку финиша после последнего. Сайт расставит остальные круги по времени из хронометража. Время круга можно поправить в таблице, а лишний круг выключить.</li>
       <li><b>Дизайн.</b> Выберите шаблон, угол экрана, цвета и шрифты. Всё сразу видно в предпросмотре.</li>

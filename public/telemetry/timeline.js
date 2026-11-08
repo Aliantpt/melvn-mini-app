@@ -135,7 +135,7 @@ export class Timeline {
 
   draw() {
     const g = this.ctx;
-    const { duration, time, laps, markers, bestIdx } = this.get();
+    const { duration, time, laps, markers, bestIdx, joints } = this.get();
     const W = this.w;
     const H = this.h;
     if (!W || !H) return;
@@ -231,6 +231,18 @@ export class Timeline {
       g.fillStyle = C.orange;
       g.fillRect(x - 1, top - 4, 2, laneH + 8);
     }
+
+    // Стыки частей видео (если камера разрезала запись).
+    (joints || []).forEach((j) => {
+      const x = Math.round(this.x(j)) + 0.5;
+      if (x < 0 || x > W) return;
+      g.fillStyle = 'rgba(255,255,255,0.35)';
+      for (let y = top; y < top + laneH; y += 6) g.fillRect(x - 0.5, y, 1, 3);
+      g.fillStyle = C.hint;
+      g.font = '500 10px Onest, system-ui, sans-serif';
+      g.textAlign = 'left';
+      g.fillText('стык', x + 3, top + laneH - 4);
+    });
 
     // Курсор воспроизведения.
     const px = Math.round(this.x(time)) + 0.5;

@@ -14,7 +14,7 @@ const store = {
 };
 
 const S = {
-  file: null,
+  segs: [],           // части видео подряд: { file, url, duration, offset, width, height }
   meta: null,         // { width, height, duration, fps, codec, decodable }
   heat: null,
   kart: '',
@@ -63,7 +63,8 @@ function markSteps() {
 $$('#steps button').forEach((b) => (b.onclick = () => showStep(b.dataset.step)));
 
 // ---- Сохранение работы в браузере ----
-const projKey = () => (S.file ? 'tele:proj:' + S.file.name + ':' + S.file.size : '');
+// Работа запоминается по набору файлов: имя и размер каждой части.
+const projKey = () => (S.segs.length ? 'tele:proj:' + S.segs.map((x) => x.file.name + ':' + x.file.size).join('|') : '');
 let saveTimer = 0;
 function saveProject() {
   clearTimeout(saveTimer);
@@ -86,37 +87,112 @@ function saveStyle() {
   styleTimer = setTimeout(() => store.set('tele:style', S.style), 300);
 }
 
-// ---- Видео ----
-const fileKey = (f) => f.name + ':' + f.size;
-async function openVideo(file) {
-  if (!file) return;
+// ---- Видео: один файл или несколько частей подряд ----
+// GoPro режет длинную запись на части: GX010123, GX020123… — номер части, потом номер записи.
+// Старые модели: GOPR0123 (первая часть), GP010123, GP020123…
+function partKey(name) {
+  let m = name.match(/^G[HXL](\d{2})(\d{4})/i);
+  if (m) return [Number(m[2]), Number(m[1])];
+  m = name.match(/^GOPR(\d{4})/i);
+  if (m) return [Number(m[1]), 0];
+  m = name.match(/^GP(\d{2})(\d{4})/i);
+  if (m) return [Number(m[2]), Number(m[1])];
+  return null;
+}
+function sortParts(files) {
+  return files.slice().sort((a, b) => {
+    const ka = partKey(a.name);
+    const kb = partKey(b.name);
+    if (ka && kb) return ka[0] - kb[0] || ka[1] - kb[1];
+    return a.name.localeCompare(b.name, undefined, { numeric: true });
+  });
+}
+const isVideoFile = (f) => /^video\//.test(f.type) || /\.(mp4|mov|m4v|mkv|webm|avi)$/i.test(f.name);
+
+// Длительность и размер кадра одного файла — через временный плеер.
+function probeEl(url) {
+  return new Promise((resolve, reject) => {
+    const v = document.createElement('video');
+    v.preload = 'metadata';
+    v.muted = true;
+    v.onloadedmetadata = () => { resolve({ duration: v.duration, width: v.videoWidth, height: v.videoHeight }); v.removeAttribute('src'); v.load(); };
+    v.onerror = () => reject(new Error('decode'));
+    v.src = url;
+  });
+}
+
+async function openVideos(files, append) {
+  files = Array.from(files || []);
+  if (!files.length) return;
   if (S.exporting) return toast('Дождитесь окончания сохранения', true);
-  if (!/^video\//.test(file.type) && !/\.(mp4|mov|m4v|mkv|webm|avi)$/i.test(file.name)) return toast('Это не видео. Выберите файл MP4 или MOV.', true);
-  const prevKey = S.file ? fileKey(S.file) : '';
-  S.file = file;
-  if (video.src) URL.revokeObjectURL(video.src);
+  const vids = files.filter(isVideoFile);
+  if (!vids.length) return toast('Это не видео. Выберите файлы MP4 или MOV.', true);
+  const prevKey = projKey();
+  const known = append ? S.segs.map((x) => x.file) : [];
+  const fresh = vids.filter((f) => !known.some((k) => k.name === f.name && k.size === f.size));
+  const list = sortParts(known.concat(fresh));
   $('#busy').hidden = false;
-  video.src = URL.createObjectURL(file);
+  const segs = [];
+  for (const f of list) {
+    const old = S.segs.find((x) => x.file === f);
+    if (old) { segs.push(old); continue; }
+    const url = URL.createObjectURL(f);
+    try {
+      const m = await probeEl(url);
+      segs.push({ file: f, url, duration: m.duration, width: m.width, height: m.height });
+    } catch (e) {
+      URL.revokeObjectURL(url);
+      segs.forEach((x) => { if (!S.segs.includes(x)) URL.revokeObjectURL(x.url); });
+      $('#busy').hidden = true;
+      return toast('Браузер не может открыть «' + f.name + '». Чаще всего так бывает с H.265 (HEVC): попробуйте Chrome или Edge.', true);
+    }
+  }
+  await setSegments(segs, prevKey);
+}
+
+async function setSegments(segs, prevKey) {
+  const wasPlaying = !video.paused;
+  video.pause();
+  S.segs.forEach((x) => { if (!segs.includes(x)) URL.revokeObjectURL(x.url); });
+  const before = S.segs;
+  S.segs = segs;
+  if (!segs.length) {
+    S.meta = null;
+    cur = -1;
+    video.removeAttribute('src');
+    video.load();
+    $('#drop').hidden = false;
+    $('#busy').hidden = true;
+    renderVideoInfo();
+    markSteps();
+    timeline.draw();
+    return;
+  }
+  const prevFirst = prevKey && before.length ? before[0] : null;
+  const keepT = S.meta ? curTime() : 0;
+  let off = 0;
+  segs.forEach((x) => { x.offset = off; off += x.duration; });
+  // Добавили часть к уже открытым: метки остаются на своих кадрах, даже если новая часть встала перед ними.
+  const kept = prevFirst && segs.includes(prevFirst) ? prevFirst.offset : null;
+  cur = -1;
   try {
-    await new Promise((resolve, reject) => {
-      video.onloadeddata = resolve;
-      video.onerror = () => reject(new Error('decode'));
-    });
+    await loadSeg(0, 0);
   } catch (e) {
     $('#busy').hidden = true;
     S.meta = null;
     renderVideoInfo('Браузер не может показать это видео. Чаще всего так бывает с H.265 (HEVC): откройте сайт в Chrome или Edge, либо включите на камере запись в H.264.');
     return;
   }
-  video.onloadeddata = null;
   video.muted = $('#mute').classList.contains('muted');
-  S.meta = { width: video.videoWidth, height: video.videoHeight, duration: video.duration, fps: 30, codec: '', decodable: null };
+  const first = S.meta;
+  S.meta = { width: segs[0].width, height: segs[0].height, duration: off, fps: first ? first.fps : 30, codec: first ? first.codec : '', decodable: first ? first.decodable : null };
   $('#busy').hidden = true;
   $('#drop').hidden = true;
 
-  // Если это видео уже открывали — возвращаем метки и круги.
-  const saved = store.get(projKey());
-  if (saved && fileKey(file) !== prevKey) {
+  // Если этот набор файлов уже открывали — возвращаем метки и круги.
+  const key = projKey();
+  const saved = key !== prevKey ? store.get(key) : null;
+  if (saved) {
     S.heat = saved.heat || null;
     S.kart = saved.kart || '';
     S.laps = saved.laps || [];
@@ -126,11 +202,14 @@ async function openVideo(file) {
     if (saved.heatUrl) $('#heat-url').value = saved.heatUrl;
     $('#heat-kart').value = S.kart;
     toast('Вернул круги и метки для этого видео');
-  } else if (fileKey(file) !== prevKey) {
-    S.markers = [];
+  } else if (key !== prevKey) {
+    if (kept == null) S.markers = [];
+    else if (kept) S.markers = S.markers.map((m) => m + kept);
   }
   timeline.setView(0, S.meta.duration);
   if (S.markers.length) zoomToHeat();
+  if (kept != null && keepT) seek(keepT + kept);
+  if (wasPlaying) video.play().catch(() => {});
   sizePreview();
   renderVideoInfo();
   renderHeat();
@@ -141,41 +220,96 @@ async function openVideo(file) {
   else if (!S.markers.length) showStep('laps');
 
   // Частота кадров и кодек — из самого файла.
+  const f0 = segs[0].file;
   loadExport().then(async (m) => {
-    const info = await m.probeVideo(file).catch(() => null);
-    if (!info || S.file !== file) return;
+    const info = await m.probeVideo(f0).catch(() => null);
+    if (!info || !S.segs.length || S.segs[0].file !== f0) return;
     S.meta.fps = info.fps || 30;
     S.meta.codec = info.codec || '';
     S.meta.decodable = info.decodable;
-    if (!isFinite(S.meta.duration) && info.duration) { S.meta.duration = info.duration; timeline.setView(0, info.duration); }
     renderVideoInfo();
   });
 }
 
+const fmtSize = (bytes) => { const mb = bytes / 1048576; return mb > 1024 ? (mb / 1024).toFixed(2) + ' ГБ' : Math.round(mb) + ' МБ'; };
 function renderVideoInfo(error) {
   const box = $('#video-info');
-  if (error) { box.innerHTML = '<div class="warn">' + esc(error) + '</div>'; return; }
-  if (!S.meta) return;
+  if (error) { box.className = ''; box.innerHTML = '<div class="warn">' + esc(error) + '</div>'; return; }
+  if (!S.meta) {
+    box.className = 'empty-note';
+    box.textContent = 'Выберите файл с камеры: MP4 или MOV. Если камера разрезала запись на части, выберите их все сразу — сайт поставит их по порядку на одну дорожку.';
+    $('#video-pick').textContent = 'Выбрать видео';
+    $('#video-add').hidden = true;
+    return;
+  }
   const m = S.meta;
-  const mb = S.file.size / 1048576;
+  const n = S.segs.length;
+  const size = S.segs.reduce((a, x) => a + x.file.size, 0);
+  const mixed = S.segs.some((x) => x.width !== m.width || x.height !== m.height);
   box.className = '';
   box.innerHTML = '<dl class="facts">' +
-    '<dt>Файл</dt><dd>' + esc(S.file.name) + '</dd>' +
+    (n === 1 ? '<dt>Файл</dt><dd>' + esc(S.segs[0].file.name) + '</dd>' : '<dt>Частей</dt><dd>' + n + '</dd>') +
     '<dt>Размер кадра</dt><dd>' + m.width + '×' + m.height + '</dd>' +
     '<dt>Длительность</dt><dd>' + fmtClock(m.duration, 0) + '</dd>' +
     '<dt>Кадров в секунду</dt><dd>' + (m.codec ? Math.round(m.fps * 100) / 100 : '…') + '</dd>' +
-    '<dt>Вес</dt><dd>' + (mb > 1024 ? (mb / 1024).toFixed(2) + ' ГБ' : Math.round(mb) + ' МБ') + '</dd>' +
+    '<dt>Вес</dt><dd>' + fmtSize(size) + '</dd>' +
     '</dl>' +
+    (n > 1 ? '<ol class="parts">' + S.segs.map((x, i) => '<li>' +
+      '<span class="p-name">' + esc(x.file.name) + '</span>' +
+      '<span class="p-time">' + fmtClock(x.offset, 0) + ' – ' + fmtClock(x.offset + x.duration, 0) + '</span>' +
+      '<span class="p-btns">' +
+      '<button type="button" class="x" data-up="' + i + '"' + (i ? '' : ' disabled') + ' aria-label="Выше">↑</button>' +
+      '<button type="button" class="x" data-down="' + i + '"' + (i < n - 1 ? '' : ' disabled') + ' aria-label="Ниже">↓</button>' +
+      '<button type="button" class="x" data-rm="' + i + '" aria-label="Убрать часть">×</button></span></li>').join('') + '</ol>' +
+      '<p class="note">Части стоят по порядку записи камеры. Если порядок неверный, поправьте стрелками.</p>' : '') +
+    (mixed ? '<div class="warn">У частей разный размер кадра — в готовом видео они впишутся в кадр первой части.</div>' : '') +
     (m.decodable === false ? '<div class="warn">Видео в формате ' + esc(m.codec || '?') + ' браузер показывает, но не может пересобрать. Для экспорта откройте сайт в Chrome или Edge.</div>' : '');
   $('#video-pick').textContent = 'Выбрать другое видео';
+  $('#video-add').hidden = false;
+  const move = (i, j) => { const segs = S.segs.slice(); const [x] = segs.splice(i, 1); segs.splice(j, 0, x); reorder(segs); };
+  $$('[data-up]', box).forEach((b) => (b.onclick = () => move(Number(b.dataset.up), Number(b.dataset.up) - 1)));
+  $$('[data-down]', box).forEach((b) => (b.onclick = () => move(Number(b.dataset.down), Number(b.dataset.down) + 1)));
+  $$('[data-rm]', box).forEach((b) => (b.onclick = () => { const segs = S.segs.slice(); segs.splice(Number(b.dataset.rm), 1); reorder(segs); }));
+}
+// Порядок частей поменялся — метки на дорожке уже не про те кадры, их нужно поставить заново.
+async function reorder(segs) {
+  if (S.exporting) return toast('Дождитесь окончания сохранения', true);
+  const prevKey = projKey();
+  const hadMarks = S.markers.length > 0;
+  S.markers = [];
+  await setSegments(segs, prevKey);
+  if (hadMarks) toast('Порядок частей изменился — поставьте старт и финиш заново');
 }
 
-$('#video-file').onchange = (e) => { openVideo(e.target.files[0]); e.target.value = ''; };
+$('#video-file').onchange = (e) => { openVideos(e.target.files, false); e.target.value = ''; };
+$('#video-more').onchange = (e) => { openVideos(e.target.files, true); e.target.value = ''; };
 $('#video-pick').onclick = () => $('#video-file').click();
+$('#video-add').onclick = () => $('#video-more').click();
 const vp = $('#viewport');
 ['dragenter', 'dragover'].forEach((ev) => vp.addEventListener(ev, (e) => { e.preventDefault(); $('#drop').classList.add('over'); }));
 ['dragleave', 'drop'].forEach((ev) => vp.addEventListener(ev, (e) => { e.preventDefault(); $('#drop').classList.remove('over'); }));
-vp.addEventListener('drop', (e) => { const f = e.dataTransfer.files[0]; if (f) openVideo(f); });
+vp.addEventListener('drop', (e) => openVideos(e.dataTransfer.files, false));
+
+// ---- Какая часть сейчас в плеере ----
+let cur = -1;
+const curTime = () => (cur >= 0 && S.segs[cur] ? S.segs[cur].offset + (video.currentTime || 0) : 0);
+function segAt(t) {
+  const i = S.segs.findIndex((x) => t < x.offset + x.duration);
+  return i < 0 ? S.segs.length - 1 : i;
+}
+function loadSeg(i, local) {
+  return new Promise((resolve, reject) => {
+    if (i === cur) { video.currentTime = local; resolve(); return; }
+    cur = i;
+    video.onloadeddata = () => { video.onloadeddata = null; video.onerror = null; video.currentTime = local; resolve(); };
+    video.onerror = () => { video.onerror = null; reject(new Error('decode')); };
+    video.src = S.segs[i].url;
+  });
+}
+// Часть закончилась — сразу играем следующую.
+video.addEventListener('ended', () => {
+  if (cur >= 0 && cur < S.segs.length - 1) loadSeg(cur + 1, 0).then(() => video.play().catch(() => {}));
+});
 
 // ---- Предпросмотр ----
 function sizePreview() {
@@ -207,11 +341,23 @@ function overlayInfo() {
 }
 const stateFor = (t) => stateAt(t, S.laps, S.markers, { final: S.style.bestMode === 'final' });
 
+// Кадр части вписывается в кадр первой (если размеры разные).
+function drawVideoFrame(ctx, W, H) {
+  const vw = video.videoWidth;
+  const vh = video.videoHeight;
+  if (!vw || !vh) return;
+  if (Math.abs(vw / vh - W / H) < 0.01) { ctx.drawImage(video, 0, 0, W, H); return; }
+  const k = Math.min(W / vw, H / vh);
+  ctx.fillStyle = '#000';
+  ctx.fillRect(0, 0, W, H);
+  ctx.drawImage(video, (W - vw * k) / 2, (H - vh * k) / 2, vw * k, vh * k);
+}
+
 let lastLapRow = -2;
 function renderFrame(t) {
-  if (t == null) t = video.currentTime || 0;
+  if (t == null) t = curTime();
   if (S.meta && video.readyState >= 2) {
-    pctx.drawImage(video, 0, 0, pv.width, pv.height);
+    drawVideoFrame(pctx, pv.width, pv.height);
     drawOverlay(pctx, pv.width, pv.height, stateFor(t), overlayInfo(), S.style, assets);
   }
   $('#clock').textContent = fmtClock(t) + (S.meta ? ' / ' + fmtClock(S.meta.duration, 0) : '');
@@ -232,7 +378,7 @@ function scheduleRender() {
 function loop() {
   if (video.paused || video.ended) { $('#play').classList.remove('playing'); renderFrame(); return; }
   renderFrame();
-  timeline.follow(video.currentTime);
+  timeline.follow(curTime());
   requestAnimationFrame(loop);
 }
 video.addEventListener('play', () => { $('#play').classList.add('playing'); requestAnimationFrame(loop); });
@@ -242,17 +388,29 @@ video.addEventListener('seeked', () => renderFrame());
 // ---- Управление воспроизведением ----
 function seek(t) {
   if (!S.meta) return;
-  video.currentTime = Math.max(0, Math.min(S.meta.duration - 0.001, t));
-  renderFrame(video.currentTime);
+  t = Math.max(0, Math.min(S.meta.duration - 0.001, t));
+  const i = segAt(t);
+  if (i === cur) {
+    video.currentTime = t - S.segs[i].offset;
+    renderFrame(t);
+    return;
+  }
+  const playing = !video.paused;
+  loadSeg(i, t - S.segs[i].offset).then(() => { if (playing) video.play().catch(() => {}); renderFrame(); }, () => {});
+  renderFrame(t);
 }
 function togglePlay() {
   if (!S.meta) return;
-  if (video.paused) video.play().catch(() => {}); else video.pause();
+  if (video.paused) {
+    // В конце последней части — начинаем сначала.
+    if (curTime() >= S.meta.duration - 0.05) seek(0);
+    video.play().catch(() => {});
+  } else video.pause();
 }
 function step(frames) {
   if (!S.meta) return;
   video.pause();
-  seek(video.currentTime + frames / (S.meta.fps || 30));
+  seek(curTime() + frames / (S.meta.fps || 30));
 }
 $('#play').onclick = togglePlay;
 $('#back').onclick = () => step(-1);
@@ -263,10 +421,11 @@ $('#mute').classList.add('muted');
 // ---- Таймлайн ----
 const timeline = new Timeline($('#timeline'), () => ({
   duration: S.meta ? S.meta.duration : 0,
-  time: video.currentTime || 0,
+  time: curTime(),
   laps: S.laps,
   markers: S.markers,
   bestIdx: (bestOf(S.laps) || { i: -1 }).i,
+  joints: S.segs.slice(1).map((x) => x.offset),
 }), {
   seek: (t) => { video.pause(); seek(t); },
   moveEdge: (idx, t) => {
@@ -284,8 +443,8 @@ function zoomToHeat() {
   const pad = Math.max(3, (b - a) * 0.04);
   timeline.setView(a - pad, b + pad);
 }
-$('#zoom-in').onclick = () => timeline.zoomBy(0.6, video.currentTime);
-$('#zoom-out').onclick = () => timeline.zoomBy(1 / 0.6, video.currentTime);
+$('#zoom-in').onclick = () => timeline.zoomBy(0.6, curTime());
+$('#zoom-out').onclick = () => timeline.zoomBy(1 / 0.6, curTime());
 $('#zoom-fit').onclick = () => (S.markers.length ? zoomToHeat() : S.meta && timeline.setView(0, S.meta.duration));
 
 // ---- Старт и финиш ----
@@ -296,14 +455,14 @@ function needLaps() {
 }
 function setStart() {
   if (needLaps()) return;
-  const t = video.currentTime;
+  const t = curTime();
   const end = S.markers.length ? S.markers[S.markers.length - 1] : NaN;
   S.markers = fitMarkers(S.laps, t, end > t + 1 ? end : NaN);
   afterMarkers(isFinite(end) && end > t + 1 ? 'Старт поставлен, круги подогнаны' : 'Старт поставлен. Теперь найдите финиш последнего круга');
 }
 function setEnd() {
   if (needLaps()) return;
-  const t = video.currentTime;
+  const t = curTime();
   if (!S.markers.length) {
     S.markers = fitMarkers(S.laps, Math.max(0, t - totalTime(S.laps)), t);
     afterMarkers('Финиш поставлен. Старт стоит по сумме кругов — проверьте его');
@@ -662,7 +821,7 @@ function download(blob, name) {
   a.remove();
   setTimeout(() => URL.revokeObjectURL(a.href), 60000);
 }
-const baseName = () => (S.file ? S.file.name.replace(/\.[^.]+$/, '') : 'video');
+const baseName = () => (S.segs.length ? S.segs[0].file.name.replace(/\.[^.]+$/, '') : 'video');
 
 $('#ex-go').onclick = async () => {
   if (!S.meta || S.exporting) return;
@@ -685,7 +844,7 @@ $('#ex-go').onclick = async () => {
   $('#ex-status').textContent = 'Готовлю…';
   try {
     const res = await mod.exportVideo({
-      file: S.file,
+      segments: S.segs.map((x) => ({ file: x.file, offset: x.offset, duration: x.duration })),
       target,
       from: r.from,
       to: r.to,
@@ -725,9 +884,10 @@ $('#ex-frame').onclick = () => {
   c.height = S.meta.height;
   const ctx = c.getContext('2d');
   if ($('#ex-mode').value === 'green') { ctx.fillStyle = '#00b140'; ctx.fillRect(0, 0, c.width, c.height); }
-  else ctx.drawImage(video, 0, 0, c.width, c.height);
-  drawOverlay(ctx, c.width, c.height, stateFor(video.currentTime), overlayInfo(), S.style, assets);
-  c.toBlob((b) => b && download(b, baseName() + '_' + fmtClock(video.currentTime, 0).replace(/:/g, '-') + '.png'), 'image/png');
+  else drawVideoFrame(ctx, c.width, c.height);
+  const t = curTime();
+  drawOverlay(ctx, c.width, c.height, stateFor(t), overlayInfo(), S.style, assets);
+  c.toBlob((b) => b && download(b, baseName() + '_' + fmtClock(t, 0).replace(/:/g, '-') + '.png'), 'image/png');
 };
 
 // ---- Клавиши ----
@@ -743,7 +903,7 @@ document.addEventListener('keydown', (e) => {
   else if (k === '[' || k === ']' || k === 'х' || k === 'ъ') {
     if (!S.markers.length) return;
     e.preventDefault();
-    const t = video.currentTime;
+    const t = curTime();
     const fwd = k === ']' || k === 'ъ';
     const m = fwd ? S.markers.find((x) => x > t + 0.01) : S.markers.slice().reverse().find((x) => x < t - 0.01);
     if (m != null) { video.pause(); seek(m); }
