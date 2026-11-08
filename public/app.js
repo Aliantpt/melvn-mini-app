@@ -50,6 +50,18 @@
     const t = new Date();
     return `${t.getFullYear()}-${String(t.getMonth() + 1).padStart(2, '0')}-${String(t.getDate()).padStart(2, '0')}`;
   };
+  // Событие прошло, когда закончилось по московскому времени: по «Окончанию»,
+  // без него — через 2 часа после «Начала», без времени — в конце дня.
+  function isPast(e) {
+    const msk = new Date(Date.now() + 3 * 3600000).toISOString().slice(0, 16).replace('T', ' ');
+    let end = '23:59';
+    if (e.end && (!e.start || e.end > e.start)) end = e.end;
+    else if (e.start) {
+      const [h, m] = e.start.split(':').map(Number);
+      end = h + 2 >= 24 ? '23:59' : `${String(h + 2).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+    }
+    return msk >= `${e.date} ${end}`;
+  }
 
   // Приветствие по времени суток на устройстве.
   function greeting(hour) {
@@ -196,9 +208,8 @@
 
   function listBody(shown) {
     shown = shown.filter((e) => found(search.list, e.title, e.championship, e.stage));
-    const t = today();
-    const upcoming = shown.filter((e) => e.date >= t).sort(byWhen);
-    const past = shown.filter((e) => e.date < t).sort(byWhen).reverse();
+    const upcoming = shown.filter((e) => !isPast(e)).sort(byWhen);
+    const past = shown.filter(isPast).sort(byWhen).reverse();
     const list = tab === 'upcoming' ? upcoming : past;
     return `
       <div class="tabs">
@@ -523,7 +534,7 @@
 
   function trainingControls(t) {
     if (t.cancelled) return '';
-    const past = t.date < today();
+    const past = isPast(t);
     if (trPick && trPick.id === t.id) {
       const n = trPick.laps;
       const laps = Array.from({ length: t.maxLaps - t.minLaps + 1 }, (_, i) => t.minLaps + i)
@@ -579,7 +590,6 @@
   function trainingsBody() {
     const all = view.trainings;
     if (!all) return '<div class="state">Обновите скрипт в таблице, чтобы увидеть тренировки.</div>';
-    const t = today();
     const chipRow = (key, values, allLabel) => {
       if (values.length < 2) return '';
       const cur = values.includes(trFilter[key]) ? trFilter[key] : '';
@@ -597,8 +607,8 @@
         (!kinds.includes(trFilter.kind) || x.kind === trFilter.kind) &&
         found(search.trainings, x.title, x.kind),
     );
-    const upcoming = shown.filter((x) => x.date >= t).sort(byWhen);
-    const past = shown.filter((x) => x.date < t).sort(byWhen).reverse();
+    const upcoming = shown.filter((x) => !isPast(x)).sort(byWhen);
+    const past = shown.filter(isPast).sort(byWhen).reverse();
     const list = trTab === 'upcoming' ? upcoming : past;
     return `
       ${searchBox('trainings')}
