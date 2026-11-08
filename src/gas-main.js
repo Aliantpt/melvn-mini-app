@@ -43,6 +43,8 @@ const HISTORY_HINTS = ['Московское время', 'Имя с листа 
 const HISTORY_KEEP_DAYS = 3;
 
 function doGet(e) {
+  // Сайт телеметрии (GitHub Pages) просит страницу заезда: браузер не может открыть чужой сайт сам.
+  if (e && e.parameter && e.parameter.timing) return jsonOut(publicTiming_(e.parameter.timing));
   const initData = (e && e.parameter && e.parameter.initData) || '';
   // Без подписи Telegram это не приложение, а браузер: показываем админ-панель (только владельцу).
   if (!initData && e && e.parameter && e.parameter.admin !== undefined) return adminPage_();

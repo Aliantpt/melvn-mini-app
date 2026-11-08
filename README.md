@@ -10,3 +10,8 @@ Telegram Mini App для пилотов, менеджеров и руковод�
 - Логика — `src/logic.js`, 
 - `npm run build:gas` собирает `dist/Code.gs`; его содержимое вставляется в редактор Apps Script. Токен бота хранится в свойствах скрипта (`BOT_TOKEN`), не в коде.
 
+
+Сайт телеметрии на видео — `public/telemetry/` (https://aliantpt.github.io/melvn-mini-app/telemetry/):
+- видео обрабатывается только в браузере (WebCodecs, библиотека Mediabunny в `public/telemetry/vendor/`, лицензия MPL-2.0);
+- круги берутся со страницы заезда timing.batyrshin.name — напрямую или через скрипт таблицы (`?timing=ссылка`), либо из сохранённой страницы;
+- логика кругов — `public/telemetry/laps.js`, тесты — `test/telemetry.test.js`.
