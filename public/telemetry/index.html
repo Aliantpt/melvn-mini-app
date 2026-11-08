@@ -1,0 +1,339 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <!-- Скрипты только свои; шрифты из Google; данные — с сайта хронометража или через скрипт таблицы. -->
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self' blob:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com data: blob:; img-src 'self' data: blob:; media-src 'self' blob:; connect-src 'self' https://timing.batyrshin.name https://script.google.com https://script.googleusercontent.com https://fonts.googleapis.com https://fonts.gstatic.com; base-uri 'none'; form-action 'none'">
+  <meta name="referrer" content="no-referrer">
+  <title>M-ELVN · телеметрия на видео</title>
+  <meta name="description" content="Наложение кругов из хронометража timing.batyrshin.name на видео заезда. Всё работает в браузере.">
+  <link rel="icon" href="logo.png">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Onest:wght@400;500;600;700&family=Unbounded:wght@500;700;900&display=swap">
+  <link rel="stylesheet" href="style.css?v=dev">
+</head>
+<body>
+  <header class="top">
+    <a class="brand" href="./" aria-label="M-ELVN телеметрия"><img src="logo.png" alt="m-elvn" width="112" height="25"><span>телеметрия</span></a>
+    <div class="top-actions">
+      <span class="saved" id="saved" hidden>Сохранено в браузере</span>
+      <button class="btn ghost small" id="help-btn" type="button">Как пользоваться</button>
+    </div>
+  </header>
+
+  <main class="editor">
+    <section class="stage" aria-label="Видео">
+      <div class="viewport" id="viewport">
+        <canvas id="preview" aria-label="Предпросмотр видео с телеметрией"></canvas>
+        <video id="video" playsinline preload="auto" muted></video>
+        <label class="drop" id="drop">
+          <input type="file" id="video-file" accept="video/*,.mp4,.mov,.mkv,.webm" hidden>
+          <span class="drop-mark" aria-hidden="true"></span>
+          <span class="drop-title">Перетащите видео заезда сюда</span>
+          <span class="drop-sub">или нажмите, чтобы выбрать файл. Видео остаётся на вашем компьютере и никуда не загружается.</span>
+        </label>
+        <div class="busy" id="busy" hidden><span></span></div>
+      </div>
+
+      <div class="transport" id="transport">
+        <div class="t-left">
+          <button class="icon-btn" id="play" type="button" aria-label="Воспроизвести" title="Пробел">
+            <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path class="i-play" d="M7 4.5v15l12-7.5z" fill="currentColor"/><g class="i-pause" fill="currentColor"><rect x="6" y="4.5" width="4" height="15" rx="1"/><rect x="14" y="4.5" width="4" height="15" rx="1"/></g></svg>
+          </button>
+          <button class="icon-btn" id="back" type="button" aria-label="Кадр назад" title="← кадр назад, Shift+← секунда">
+            <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M15 5l-7 7 7 7" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </button>
+          <button class="icon-btn" id="fwd" type="button" aria-label="Кадр вперёд" title="→ кадр вперёд, Shift+→ секунда">
+            <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M9 5l7 7-7 7" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </button>
+          <button class="icon-btn" id="mute" type="button" aria-label="Звук" title="Звук">
+            <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M4 9.5h3.5L12 5.5v13l-4.5-4H4z" fill="currentColor"/><path class="i-wave" d="M15.5 9a4.5 4.5 0 0 1 0 6M18 6.5a8 8 0 0 1 0 11" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><path class="i-x" d="M16 9.5l5 5M21 9.5l-5 5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+          </button>
+          <span class="clock" id="clock">00:00.000</span>
+        </div>
+        <div class="t-mid">
+          <button class="btn mark" id="set-start" type="button" title="Клавиша S"><i class="flag s"></i>Старт 1-го круга здесь</button>
+          <button class="btn mark" id="set-end" type="button" title="Клавиша F"><i class="flag f"></i>Финиш последнего здесь</button>
+        </div>
+        <div class="t-right">
+          <button class="icon-btn" id="zoom-out" type="button" aria-label="Отдалить таймлайн">
+            <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M5 12h14" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg>
+          </button>
+          <button class="btn ghost small" id="zoom-fit" type="button" title="Показать весь заезд">Весь заезд</button>
+          <button class="icon-btn" id="zoom-in" type="button" aria-label="Приблизить таймлайн">
+            <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M5 12h14M12 5v14" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg>
+          </button>
+        </div>
+      </div>
+      <canvas id="timeline" class="timeline" aria-label="Таймлайн с метками кругов"></canvas>
+      <p class="tl-hint" id="tl-hint">Колесо мыши приближает таймлайн, Shift + колесо листает. Метки кругов можно перетаскивать.</p>
+    </section>
+
+    <aside class="side">
+      <nav class="steps" id="steps" aria-label="Шаги">
+        <button type="button" data-step="video" class="on"><b>1</b>Видео</button>
+        <button type="button" data-step="heat"><b>2</b>Заезд</button>
+        <button type="button" data-step="laps"><b>3</b>Круги</button>
+        <button type="button" data-step="design"><b>4</b>Дизайн</button>
+        <button type="button" data-step="export"><b>5</b>Экспорт</button>
+      </nav>
+
+      <!-- 1. Видео -->
+      <div class="pane" data-pane="video">
+        <h2>Видео заезда</h2>
+        <div id="video-info" class="empty-note">Выберите файл с камеры: MP4 или MOV. Чем короче видео, тем быстрее экспорт, но обрезать заранее не нужно — сайт сам сохранит только заезд.</div>
+        <button class="btn wide" id="video-pick" type="button">Выбрать видео</button>
+      </div>
+
+      <!-- 2. Заезд -->
+      <div class="pane" data-pane="heat" hidden>
+        <h2>Заезд из хронометража</h2>
+        <label class="field">
+          <span>Ссылка на заезд</span>
+          <input class="input" id="heat-url" type="url" inputmode="url" placeholder="https://timing.batyrshin.name/tracks/drive/heats/134955" autocomplete="off">
+        </label>
+        <label class="field">
+          <span>Номер вашего карта</span>
+          <input class="input kart-input" id="heat-kart" inputmode="numeric" placeholder="например, 21" autocomplete="off" maxlength="6">
+        </label>
+        <button class="btn wide" id="heat-load" type="button">Загрузить круги</button>
+        <details class="fallback" id="heat-fallback">
+          <summary>Не загружается? Откройте сохранённую страницу</summary>
+          <p>Откройте заезд на timing.batyrshin.name, нажмите Ctrl+S и сохраните страницу. Потом выберите этот файл здесь.</p>
+          <label class="btn ghost wide"><input type="file" id="heat-file" accept=".html,.htm,text/html" hidden>Выбрать сохранённую страницу</label>
+        </details>
+        <div id="heat-box"></div>
+      </div>
+
+      <!-- 3. Круги -->
+      <div class="pane" data-pane="laps" hidden>
+        <h2>Круги на видео</h2>
+        <ol class="howto">
+          <li>Найдите кадр, где карт пересекает линию в начале первого круга, и нажмите «Старт» или клавишу <kbd>S</kbd>.</li>
+          <li>Найдите пересечение линии в конце последнего круга и нажмите «Финиш» или <kbd>F</kbd>.</li>
+          <li>Остальные метки встанут сами. Любую можно подвинуть мышью на таймлайне.</li>
+        </ol>
+        <div id="fit-box"></div>
+        <div id="laps-box"></div>
+      </div>
+
+      <!-- 4. Дизайн -->
+      <div class="pane design" data-pane="design" hidden>
+        <h2>Дизайн телеметрии</h2>
+
+        <section class="group">
+          <h3>Шаблон</h3>
+          <div class="layouts" role="radiogroup" aria-label="Шаблон">
+            <button type="button" data-layout="card" role="radio"><i class="lay lay-card"></i>Карточка</button>
+            <button type="button" data-layout="bar" role="radio"><i class="lay lay-bar"></i>Полоса</button>
+            <button type="button" data-layout="mini" role="radio"><i class="lay lay-mini"></i>Только цифры</button>
+          </div>
+        </section>
+
+        <section class="group">
+          <h3>Положение</h3>
+          <div class="pos-row">
+            <div class="anchor" role="radiogroup" aria-label="Угол экрана">
+              <button type="button" data-anchor="tl" aria-label="Слева сверху"></button>
+              <button type="button" data-anchor="tc" aria-label="Сверху по центру"></button>
+              <button type="button" data-anchor="tr" aria-label="Справа сверху"></button>
+              <button type="button" data-anchor="ml" aria-label="Слева посередине"></button>
+              <button type="button" data-anchor="mc" aria-label="По центру"></button>
+              <button type="button" data-anchor="mr" aria-label="Справа посередине"></button>
+              <button type="button" data-anchor="bl" aria-label="Слева снизу"></button>
+              <button type="button" data-anchor="bc" aria-label="Снизу по центру"></button>
+              <button type="button" data-anchor="br" aria-label="Справа снизу"></button>
+            </div>
+            <div class="sliders">
+              <label class="range"><span>Размер <output data-out="size"></output></span><input type="range" data-k="size" min="40" max="220" step="1"></label>
+              <label class="range"><span>Отступ по бокам <output data-out="marginX"></output></span><input type="range" data-k="marginX" min="0" max="25" step="0.5"></label>
+              <label class="range"><span>Отступ сверху/снизу <output data-out="marginY"></output></span><input type="range" data-k="marginY" min="0" max="25" step="0.5"></label>
+            </div>
+          </div>
+        </section>
+
+        <section class="group">
+          <h3>Цвета</h3>
+          <div class="presets" id="presets"></div>
+          <div class="colors">
+            <label><input type="color" data-k="accent"><span>Акцент</span></label>
+            <label><input type="color" data-k="text"><span>Цифры</span></label>
+            <label><input type="color" data-k="muted"><span>Подписи</span></label>
+            <label><input type="color" data-k="panel"><span>Плашка</span></label>
+            <label><input type="color" data-k="faster"><span>Быстрее</span></label>
+            <label><input type="color" data-k="slower"><span>Медленнее</span></label>
+            <label><input type="color" data-k="record"><span>Новый лучший</span></label>
+          </div>
+        </section>
+
+        <section class="group">
+          <h3>Фон</h3>
+          <label class="range"><span>Непрозрачность плашки <output data-out="panelAlpha"></output></span><input type="range" data-k="panelAlpha" min="0" max="100" step="1"></label>
+          <label class="range"><span>Размытие видео под плашкой <output data-out="blur"></output></span><input type="range" data-k="blur" min="0" max="40" step="1"></label>
+          <label class="range"><span>Затемнение кадра у телеметрии <output data-out="shade"></output></span><input type="range" data-k="shade" min="0" max="90" step="1"></label>
+          <label class="range"><span>Скругление углов <output data-out="radius"></output></span><input type="range" data-k="radius" min="0" max="48" step="1"></label>
+        </section>
+
+        <section class="group">
+          <h3>Шрифты</h3>
+          <div class="font-row">
+            <label class="field"><span>Цифры</span><select class="input" data-k="numFont" data-fonts></select></label>
+            <label class="field narrow"><span>Толщина</span>
+              <select class="input" data-k="numWeight" data-num>
+                <option value="400">Обычный</option><option value="500">Средний</option><option value="600">Полужирный</option>
+                <option value="700">Жирный</option><option value="800">Очень жирный</option><option value="900">Чёрный</option>
+              </select>
+            </label>
+          </div>
+          <div class="font-row">
+            <label class="field"><span>Подписи</span><select class="input" data-k="labelFont" data-fonts></select></label>
+            <label class="field narrow"><span>Толщина</span>
+              <select class="input" data-k="labelWeight" data-num>
+                <option value="400">Обычный</option><option value="500">Средний</option><option value="600">Полужирный</option><option value="700">Жирный</option>
+              </select>
+            </label>
+          </div>
+          <div class="font-add">
+            <label class="btn ghost small"><input type="file" id="font-file" accept=".otf,.ttf,.woff,.woff2" hidden>Добавить свой шрифт</label>
+            <form id="gfont-form" class="inline-form">
+              <input class="input" id="gfont-name" placeholder="Любой шрифт Google Fonts" aria-label="Название шрифта Google Fonts">
+              <button class="btn ghost small" type="submit">Подключить</button>
+            </form>
+          </div>
+          <p class="note">Свой шрифт хранится только в этом браузере и никуда не загружается.</p>
+        </section>
+
+        <section class="group">
+          <h3>Что показывать</h3>
+          <div class="checks">
+            <label><input type="checkbox" data-k="show.logo">Логотип команды</label>
+            <label><input type="checkbox" data-k="show.kart">Номер карта</label>
+            <label><input type="checkbox" data-k="show.name">Имя из хронометража</label>
+            <label><input type="checkbox" data-k="show.lapNo">Номер круга</label>
+            <label><input type="checkbox" data-k="show.pos">Позиция в заезде</label>
+            <label><input type="checkbox" data-k="show.current">Текущий круг</label>
+            <label><input type="checkbox" data-k="show.last">Последний круг</label>
+            <label><input type="checkbox" data-k="show.delta">Разница с лучшим</label>
+            <label><input type="checkbox" data-k="show.best">Лучший круг</label>
+            <label><input type="checkbox" data-k="show.bestLap">На каком круге лучший</label>
+            <label><input type="checkbox" data-k="show.heatBest">Бест всего заезда</label>
+            <label><input type="checkbox" data-k="flash">Подсветка после круга</label>
+          </div>
+        </section>
+
+        <section class="group">
+          <h3>Поведение</h3>
+          <label class="field"><span>Лучший круг</span>
+            <select class="input" data-k="bestMode"><option value="live">По ходу заезда</option><option value="final">Итоговый сразу</option></select>
+          </label>
+          <div class="font-row">
+            <label class="field"><span>До старта</span>
+              <select class="input" data-k="before"><option value="show">Показывать</option><option value="hide">Скрывать</option></select>
+            </label>
+            <label class="field"><span>После финиша</span>
+              <select class="input" data-k="after"><option value="show">Показывать</option><option value="hide">Скрывать</option></select>
+            </label>
+          </div>
+          <label class="field"><span>Точность текущего круга</span>
+            <select class="input" data-k="digits" data-num><option value="1">36.7</option><option value="2">36.72</option><option value="3">36.723</option></select>
+          </label>
+          <label class="check"><input type="checkbox" data-k="lower">Подписи строчными буквами</label>
+        </section>
+
+        <section class="group">
+          <h3>Подписи</h3>
+          <div class="labels">
+            <label class="field"><span>Текущий круг</span><input class="input" data-k="labels.current"></label>
+            <label class="field"><span>Последний круг</span><input class="input" data-k="labels.last"></label>
+            <label class="field"><span>Лучший круг</span><input class="input" data-k="labels.best"></label>
+            <label class="field"><span>Круг</span><input class="input" data-k="labels.lap"></label>
+            <label class="field"><span>Новый лучший</span><input class="input" data-k="labels.newBest"></label>
+            <label class="field"><span>Финиш</span><input class="input" data-k="labels.finish"></label>
+            <label class="field"><span>Бест заезда</span><input class="input" data-k="labels.heatBest"></label>
+          </div>
+        </section>
+
+        <section class="group">
+          <h3>Стиль целиком</h3>
+          <p class="note">Сохраните стиль файлом и отправьте команде, чтобы у всех видео были одинаковыми.</p>
+          <div class="btn-row">
+            <button class="btn ghost small" id="style-save" type="button">Скачать стиль</button>
+            <label class="btn ghost small"><input type="file" id="style-file" accept=".json,application/json" hidden>Загрузить стиль</label>
+            <button class="btn ghost small" id="style-reset" type="button">Вернуть стиль M-ELVN</button>
+          </div>
+        </section>
+      </div>
+
+      <!-- 5. Экспорт -->
+      <div class="pane" data-pane="export" hidden>
+        <h2>Сохранить видео</h2>
+        <label class="field"><span>Что сохранить</span>
+          <select class="input" id="ex-range">
+            <option value="heat">Только заезд, с запасом до и после</option>
+            <option value="all">Всё видео</option>
+          </select>
+        </label>
+        <label class="range" id="ex-pad-row"><span>Запас до старта и после финиша <output id="ex-pad-out"></output></span><input type="range" id="ex-pad" min="0" max="60" step="1" value="5"></label>
+        <div class="font-row">
+          <label class="field"><span>Размер</span>
+            <select class="input" id="ex-size">
+              <option value="0">Как в оригинале</option>
+              <option value="2160">4K (2160p)</option>
+              <option value="1440">1440p</option>
+              <option value="1080">Full HD (1080p)</option>
+              <option value="720">HD (720p)</option>
+            </select>
+          </label>
+          <label class="field"><span>Качество</span>
+            <select class="input" id="ex-quality">
+              <option value="medium">Хорошее, файл меньше</option>
+              <option value="high" selected>Высокое</option>
+              <option value="max">Максимальное</option>
+            </select>
+          </label>
+        </div>
+        <label class="field"><span>Вид</span>
+          <select class="input" id="ex-mode">
+            <option value="video">Видео с телеметрией</option>
+            <option value="green">Только телеметрия на зелёном фоне (для монтажа)</option>
+          </select>
+        </label>
+        <div id="ex-summary" class="summary"></div>
+        <button class="btn wide big" id="ex-go" type="button">Сохранить видео</button>
+        <div class="progress" id="ex-progress" hidden>
+          <div class="bar"><span id="ex-bar"></span></div>
+          <div class="progress-row"><span id="ex-status">Готовлю…</span><button class="btn ghost small" id="ex-cancel" type="button">Отменить</button></div>
+        </div>
+        <button class="btn ghost wide" id="ex-frame" type="button">Сохранить текущий кадр картинкой</button>
+        <p class="note">Видео собирается прямо в браузере и никуда не загружается. Лучше всего работает в Chrome или Edge на компьютере. Не закрывайте вкладку, пока идёт сохранение.</p>
+      </div>
+    </aside>
+  </main>
+
+  <dialog class="help" id="help">
+    <form method="dialog"><button class="close" aria-label="Закрыть">×</button></form>
+    <h2>Как наложить телеметрию</h2>
+    <ol>
+      <li><b>Видео.</b> Выберите файл с камеры. Он не загружается в интернет: всё происходит в вашем браузере.</li>
+      <li><b>Заезд.</b> Вставьте ссылку на заезд с timing.batyrshin.name и укажите номер своего карта. Круги и их время появятся сами.</li>
+      <li><b>Круги.</b> Поставьте метку старта на кадр, где карт пересекает линию перед первым кругом, и метку финиша после последнего. Сайт расставит остальные круги по времени из хронометража. Время круга можно поправить в таблице, а лишний круг выключить.</li>
+      <li><b>Дизайн.</b> Выберите шаблон, угол экрана, цвета и шрифты. Всё сразу видно в предпросмотре.</li>
+      <li><b>Экспорт.</b> Нажмите «Сохранить видео» и выберите, куда положить файл MP4.</li>
+    </ol>
+    <h3>Клавиши</h3>
+    <ul class="keys">
+      <li><kbd>Пробел</kbd> пуск и пауза</li>
+      <li><kbd>←</kbd> <kbd>→</kbd> кадр назад и вперёд, с <kbd>Shift</kbd> на секунду</li>
+      <li><kbd>S</kbd> старт первого круга, <kbd>F</kbd> финиш последнего</li>
+      <li><kbd>[</kbd> <kbd>]</kbd> к предыдущей и следующей метке</li>
+    </ul>
+  </dialog>
+
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+  <script src="../config.js?v=dev"></script>
+  <script type="module" src="app.js?v=dev"></script>
+</body>
+</html>

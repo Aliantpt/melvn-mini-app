@@ -47,6 +47,8 @@ const HISTORY_HINTS = ['Московское время', 'Имя с листа 
 const HISTORY_KEEP_DAYS = 3;
 
 function doGet(e) {
+  // Сайт телеметрии (GitHub Pages) просит страницу заезда: браузер не может открыть чужой сайт сам.
+  if (e && e.parameter && e.parameter.timing) return jsonOut(publicTiming_(e.parameter.timing));
   const initData = (e && e.parameter && e.parameter.initData) || '';
   // Без подписи Telegram это не приложение, а браузер: показываем админ-панель (только владельцу).
   if (!initData && e && e.parameter && e.parameter.admin !== undefined) return adminPage_();
@@ -748,6 +750,33 @@ function admin_timing(url) {
   const code = res.getResponseCode();
   if (code !== 200) return { error: 'http_' + code };
   return { url: url, html: res.getContentText('UTF-8').slice(0, 3000000) };
+}
+
+// Для сайта телеметрии: только страницы заездов, без входа. Готовую страницу запоминаем на 6 часов,
+// чтобы не нагружать сайт хронометража повторными запросами.
+const HEAT_PAGE_URL = /^https:\/\/timing\.batyrshin\.name\/tracks\/[a-z0-9_-]+\/heats\/\d+$/i;
+
+function publicTiming_(url) {
+  url = String(url || '').trim().replace(/^http:/i, 'https:').replace(/[?#].*$/, '').replace(/\/+$/, '');
+  if (!HEAT_PAGE_URL.test(url)) return { error: 'bad_url' };
+  const cache = CacheService.getScriptCache();
+  const key = 'heat:' + url.replace(/^.*\/tracks\//, '');
+  const hit = cache.get(key);
+  if (hit) return { url: url, html: hit };
+  let res;
+  try {
+    res = UrlFetchApp.fetch(url, { muteHttpExceptions: true, followRedirects: true });
+  } catch (err) {
+    return { error: 'fetch' };
+  }
+  const code = res.getResponseCode();
+  if (code !== 200) return { error: 'http_' + code };
+  const html = res.getContentText('UTF-8').slice(0, 3000000);
+  // В кэш помещается до 100 КБ — страница заезда обычно меньше.
+  if (html.length < 95000) {
+    try { cache.put(key, html, 21600); } catch (err) { /* не страшно */ }
+  }
+  return { url: url, html: html };
 }
 
 // Отправка результатов. items: [{key: ник или ID из «Людей», pdf: base64, fileName, caption}].
